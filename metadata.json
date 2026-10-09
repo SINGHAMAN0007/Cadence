@@ -1,0 +1,8 @@
+{
+  "name": "Cadence Audio Player",
+  "description": "Modern, sleek single-page Web Music Player with IndexedDB local audio library, custom playlists, real-time audio visualizer, sleep timer with smooth fade-out, and keyboard controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
