@@ -1,0 +1,129 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User cloud synced preferences, favorites, and playlist metadata",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "User email address"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "User display name"
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Profile picture URL"
+        },
+        "favoriteTrackKeys": {
+          "type": "array",
+          "description": "List of favorite track title/hash keys"
+        },
+        "playlistMetadata": {
+          "type": "array",
+          "description": "Synced custom playlist definitions (without audio binaries)"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last time user metadata synced"
+        }
+      },
+      "required": ["userId"]
+    },
+    "PlaybackSession": {
+      "title": "PlaybackSession",
+      "description": "Real-time synchronized listening room session for Listen Together",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Unique session ID"
+        },
+        "roomCode": {
+          "type": "string",
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9]+$",
+          "description": "Short 6-character room code for joining"
+        },
+        "hostUserId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase Auth UID of the session host"
+        },
+        "hostDisplayName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Host name shown to listeners"
+        },
+        "trackTitle": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Currently playing track title"
+        },
+        "trackArtist": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Currently playing track artist"
+        },
+        "trackAlbum": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Currently playing track album"
+        },
+        "trackDuration": {
+          "type": "number",
+          "description": "Track total duration in seconds"
+        },
+        "isPlaying": {
+          "type": "boolean",
+          "description": "Whether playback is currently running"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Current playhead playback position in seconds"
+        },
+        "lastUpdated": {
+          "type": "number",
+          "description": "Client timestamp when last seek/play action was sent"
+        },
+        "updatedByDeviceId": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Unique device identifier to avoid feedback loops"
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Status of session: active or ended"
+        }
+      },
+      "required": ["id", "roomCode", "hostUserId", "isPlaying", "timestamp", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Individual user preferences, favorites, and playlists"
+    },
+    "/sessions/{sessionId}": {
+      "schema": {
+        "$ref": "#/entities/PlaybackSession"
+      },
+      "description": "Shared real-time playback room sessions"
+    }
+  }
+}

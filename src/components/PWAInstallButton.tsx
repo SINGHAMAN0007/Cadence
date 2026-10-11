@@ -39,7 +39,7 @@ export const PWAInstallButton: React.FC = () => {
 
         {showIOSGuide && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
-            <div className="w-full max-w-sm rounded-2xl bg-zinc-900 border border-zinc-800 p-5 shadow-2xl text-zinc-100">
+            <div className="w-full max-w-sm rounded-2xl bg-[#0a0a0a] border border-white/10 p-5 shadow-2xl text-zinc-100">
               <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
                 <h3 className="text-sm font-semibold text-white">Install on Mobile</h3>
                 <button

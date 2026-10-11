@@ -1,23 +1,23 @@
 import React, { useEffect, useRef } from 'react';
-import type { VisualizerMode } from '../types';
 
 interface AudioVisualizerProps {
   analyser: AnalyserNode | null;
   isPlaying: boolean;
-  mode?: VisualizerMode;
   className?: string;
   accentColor?: string;
+  mode?: string;
 }
+
+const BAR_COUNT = 36; // Symmetrical 36 rounded pill bars (18 mirrored pairs)
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   analyser,
   isPlaying,
-  mode = 'bars',
   className = 'w-full h-full',
-  accentColor = '#8b5cf6', // violet-500
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameId = useRef<number | null>(null);
+  const prevHeights = useRef<number[]>(new Array(BAR_COUNT).fill(4));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -31,8 +31,8 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
+        canvas.width = Math.floor(rect.width * dpr);
+        canvas.height = Math.floor(rect.height * dpr);
       }
     };
 
@@ -40,7 +40,17 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     const resizeObserver = new ResizeObserver(() => resizeCanvas());
     resizeObserver.observe(canvas);
 
+    // Enforce Web Audio analyser smoothing
+    if (analyser) {
+      try {
+        analyser.smoothingTimeConstant = 0.8;
+      } catch {
+        // Ignore audio node parameter access error if closed
+      }
+    }
+
     let idlePhase = 0;
+    const halfBars = BAR_COUNT / 2; // 18 bands
 
     const render = () => {
       animFrameId.current = requestAnimationFrame(render);
@@ -50,142 +60,133 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
       ctx.clearRect(0, 0, width, height);
 
-      // If analyser is not active or paused
-      if (!analyser || !isPlaying) {
-        // Subtle resting pulse wave
-        idlePhase += 0.03;
-        ctx.save();
-        ctx.lineWidth = 1.5 * dpr;
-        ctx.strokeStyle = 'rgba(161, 161, 170, 0.25)'; // muted zinc
-        ctx.beginPath();
-        const midY = height / 2;
-        const waveCount = 40;
-        for (let i = 0; i <= waveCount; i++) {
-          const x = (i / waveCount) * width;
-          const y = midY + Math.sin(i * 0.35 + idlePhase) * (height * 0.06);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-        ctx.restore();
-        return;
-      }
+      const minBarHeight = 3.5 * dpr;
+      const maxBarHeight = height * 0.94;
 
-      // Live Analyser Data
-      if (mode === 'bars') {
-        const bufferLength = analyser.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        analyser.getByteFrequencyData(dataArray);
+      // Extract Mel/Logarithmic frequency bands if playing & analyser available
+      const bandEnergies: number[] = new Array(halfBars).fill(0);
 
-        // Take a relevant slice (lower & mid frequencies are most musical)
-        const barsToDraw = Math.min(48, Math.floor(width / (4 * dpr)));
-        const step = Math.floor(bufferLength * 0.75 / barsToDraw);
-        const totalBarWidth = width / barsToDraw;
-        const barWidth = Math.max(2 * dpr, totalBarWidth - 2.5 * dpr);
-
-        for (let i = 0; i < barsToDraw; i++) {
-          const value = dataArray[i * step] || 0;
-          const percent = value / 255;
-          const barHeight = Math.max(3 * dpr, percent * height * 0.92);
-          const x = i * totalBarWidth + (totalBarWidth - barWidth) / 2;
-          const y = height - barHeight;
-
-          // Gradient color: Purple -> Cyan / Pink
-          const grad = ctx.createLinearGradient(0, height, 0, y);
-          grad.addColorStop(0, accentColor);
-          grad.addColorStop(0.7, '#38bdf8'); // sky-400
-          grad.addColorStop(1, '#ec4899'); // pink-500
-
-          ctx.fillStyle = grad;
-          // Rounded top bar
-          const radius = Math.min(barWidth / 2, 4 * dpr);
-          ctx.beginPath();
-          ctx.moveTo(x, height);
-          ctx.lineTo(x, y + radius);
-          ctx.quadraticCurveTo(x, y, x + radius, y);
-          ctx.lineTo(x + barWidth - radius, y);
-          ctx.quadraticCurveTo(x + barWidth, y, x + barWidth, y + radius);
-          ctx.lineTo(x + barWidth, height);
-          ctx.closePath();
-          ctx.fill();
-        }
-      } else if (mode === 'wave') {
-        const bufferLength = analyser.fftSize;
-        const dataArray = new Uint8Array(bufferLength);
-        analyser.getByteTimeDomainData(dataArray);
-
-        ctx.save();
-        ctx.lineWidth = 2.5 * dpr;
-        ctx.strokeStyle = '#38bdf8';
-        ctx.shadowColor = accentColor;
-        ctx.shadowBlur = 8 * dpr;
-
-        ctx.beginPath();
-        const sliceWidth = width / bufferLength;
-        let x = 0;
-
-        for (let i = 0; i < bufferLength; i++) {
-          const v = dataArray[i] / 128.0;
-          const y = (v * height) / 2;
-
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
+      if (analyser && isPlaying) {
+        // Enforce smoothing constant
+        if (analyser.smoothingTimeConstant !== 0.8) {
+          try {
+            analyser.smoothingTimeConstant = 0.8;
+          } catch {
+            // ignore
           }
-          x += sliceWidth;
         }
 
-        ctx.lineTo(width, height / 2);
-        ctx.stroke();
-        ctx.restore();
-      } else if (mode === 'circle') {
         const bufferLength = analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
         analyser.getByteFrequencyData(dataArray);
 
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const baseRadius = Math.min(width, height) * 0.22;
-        const numPoints = 64;
-        const angleStep = (Math.PI * 2) / numPoints;
+        // Map 18 bands logarithmically from bin ~1 to bin ~85% of buffer
+        const minBin = 1;
+        const maxBin = Math.max(minBin + 2, Math.floor(bufferLength * 0.85));
 
-        ctx.save();
-        ctx.translate(centerX, centerY);
+        for (let b = 0; b < halfBars; b++) {
+          const norm = b / (halfBars - 1);
+          const nextNorm = (b + 1) / (halfBars - 1);
 
-        // Core glowing pulse
-        const avgFreq = dataArray.slice(0, 16).reduce((a, b) => a + b, 0) / 16;
-        const pulse = (avgFreq / 255) * 8 * dpr;
+          const startBin = Math.floor(minBin * Math.pow(maxBin / minBin, norm));
+          const endBin = Math.max(startBin + 1, Math.floor(minBin * Math.pow(maxBin / minBin, nextNorm)));
 
-        ctx.beginPath();
-        ctx.arc(0, 0, baseRadius + pulse, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(139, 92, 246, 0.15)';
-        ctx.fill();
-        ctx.lineWidth = 1.5 * dpr;
-        ctx.strokeStyle = 'rgba(139, 92, 246, 0.5)';
-        ctx.stroke();
+          let sum = 0;
+          let count = 0;
+          for (let bin = startBin; bin < endBin && bin < bufferLength; bin++) {
+            sum += dataArray[bin];
+            count++;
+          }
+          const rawEnergy = count > 0 ? sum / count : 0;
 
-        // Radiating spikes
-        for (let i = 0; i < numPoints; i++) {
-          const val = dataArray[i * 2] || 0;
-          const spikeLen = (val / 255) * (Math.min(width, height) * 0.25);
-          const rad = baseRadius + pulse;
-          const angle = i * angleStep;
-
-          const x1 = Math.cos(angle) * rad;
-          const y1 = Math.sin(angle) * rad;
-          const x2 = Math.cos(angle) * (rad + spikeLen);
-          const y2 = Math.sin(angle) * (rad + spikeLen);
-
-          ctx.strokeStyle = `hsl(${(i / numPoints) * 120 + 240}, 85%, 65%)`;
-          ctx.lineWidth = 2 * dpr;
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
+          // Frequency compensation:
+          // Dampen booming bass slightly (0.82x) and boost high-frequency presence (up to 2.35x)
+          // so bars dance dynamically across the entire spectrum
+          const trebleScale = 0.82 + Math.pow(norm, 1.15) * 1.53;
+          const weighted = (rawEnergy * trebleScale) / 255;
+          bandEnergies[b] = Math.min(1, Math.max(0, weighted));
         }
-        ctx.restore();
       }
+
+      // Compute target heights for symmetrical layout
+      idlePhase += 0.025;
+
+      // Layout bar geometry
+      let barWidth = 3.5 * dpr;
+      let gap = 2.5 * dpr;
+      let totalWidth = BAR_COUNT * barWidth + (BAR_COUNT - 1) * gap;
+
+      if (totalWidth > width * 0.96) {
+        const scale = (width * 0.96) / totalWidth;
+        barWidth = Math.max(2 * dpr, barWidth * scale);
+        gap = Math.max(1.5 * dpr, gap * scale);
+        totalWidth = BAR_COUNT * barWidth + (BAR_COUNT - 1) * gap;
+      }
+
+      const startX = (width - totalWidth) / 2;
+
+      // Vibrant vertical gradient (Cyan to Violet to Coral/Pink to Neon Rose)
+      const grad = ctx.createLinearGradient(0, height, 0, height - maxBarHeight);
+      grad.addColorStop(0, '#06b6d4');   // Electric Cyan (bottom anchor)
+      grad.addColorStop(0.35, '#8b5cf6'); // Vibrant Violet
+      grad.addColorStop(0.72, '#ec4899'); // Coral Pink
+      grad.addColorStop(1.0, '#f43f5e');  // Neon Rose (peak)
+
+      ctx.save();
+      ctx.fillStyle = grad;
+      ctx.shadowColor = 'rgba(236, 72, 153, 0.45)';
+      ctx.shadowBlur = 6 * dpr;
+
+      for (let i = 0; i < BAR_COUNT; i++) {
+        let targetHeight = minBarHeight;
+
+        if (analyser && isPlaying) {
+          // Symmetrical mapping:
+          // The center two bars (17 and 18) receive lowest punchy bass frequencies (band 0).
+          // Both edges (0 and 35) receive the sparkling high air/treble (band 17).
+          const bandIndex = i < halfBars ? (halfBars - 1 - i) : (i - halfBars);
+          const energy = bandEnergies[bandIndex] || 0;
+
+          // Smooth edge taper envelope (Siri/Spotify style)
+          const distFromCenter = Math.abs((i - (BAR_COUNT - 1) / 2) / ((BAR_COUNT - 1) / 2));
+          const taper = 1 - Math.pow(distFromCenter, 2.8) * 0.24;
+
+          targetHeight = minBarHeight + energy * taper * (maxBarHeight - minBarHeight);
+        } else {
+          // Idle resting state: gentle organic breathing wave
+          const idleWave = Math.sin(i * 0.35 + idlePhase) * (1.8 * dpr);
+          targetHeight = Math.max(minBarHeight, minBarHeight + idleWave);
+        }
+
+        // Smooth Animation & Physics:
+        // Linear interpolation / lerping (currentHeight = prevHeight * 0.8 + targetHeight * 0.2)
+        prevHeights.current[i] = prevHeights.current[i] * 0.8 + targetHeight * 0.2;
+        const currentHeight = Math.max(minBarHeight, prevHeights.current[i]);
+
+        const x = startX + i * (barWidth + gap);
+        const y = height - currentHeight;
+        const radius = barWidth / 2;
+
+        // Render rounded-full pill bar
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(x, y, barWidth, currentHeight, radius);
+        } else {
+          ctx.moveTo(x + radius, y);
+          ctx.lineTo(x + barWidth - radius, y);
+          ctx.arcTo(x + barWidth, y, x + barWidth, y + radius, radius);
+          ctx.lineTo(x + barWidth, y + currentHeight - radius);
+          ctx.arcTo(x + barWidth, y + currentHeight, x + barWidth - radius, y + currentHeight, radius);
+          ctx.lineTo(x + radius, y + currentHeight);
+          ctx.arcTo(x, y + currentHeight, x, y + currentHeight - radius, radius);
+          ctx.lineTo(x, y + radius);
+          ctx.arcTo(x, y, x + radius, y, radius);
+          ctx.closePath();
+        }
+        ctx.fill();
+      }
+
+      ctx.restore();
     };
 
     render();
@@ -194,7 +195,13 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
       resizeObserver.disconnect();
     };
-  }, [analyser, isPlaying, mode, accentColor]);
+  }, [analyser, isPlaying]);
 
-  return <canvas ref={canvasRef} className={className} />;
+  return (
+    <canvas 
+      ref={canvasRef} 
+      className={className} 
+      style={{ filter: 'drop-shadow(0 0 6px rgba(236,72,153,0.35))' }}
+    />
+  );
 };

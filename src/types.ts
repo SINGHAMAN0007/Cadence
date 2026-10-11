@@ -1,3 +1,5 @@
+export type MusicCategory = 'Hindi' | 'English' | 'Phonk';
+
 export interface Track {
   id: number;
   title: string;
@@ -15,6 +17,8 @@ export interface Track {
   bitrate?: number;
   sampleRate?: number;
   lyrics?: string; // ID3 USLT / LRC synchronized lyrics
+  category?: MusicCategory | string;
+  genre?: string;
 }
 
 export interface Playlist {

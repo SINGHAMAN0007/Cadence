@@ -58,7 +58,7 @@ export const SleepTimerModal: React.FC<SleepTimerModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150">
       <div 
-        className="w-full max-w-md bg-[#1c1c1e]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-6 text-zinc-100 relative"
+        className="w-full max-w-md bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-6 text-zinc-100 relative"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { 
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, 
-  Repeat, Shuffle, ListMusic, Timer, Maximize2, Heart, Music, Quote
+  Repeat, Shuffle, Timer, Maximize2, Music, Quote
 } from 'lucide-react';
+import { AudioSeeker } from './AudioSeeker';
 import type { Track, RepeatMode, SleepTimerState } from '../types';
 
 interface PlayerBarProps {
@@ -62,56 +63,30 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onOpenFullscreen,
   onOpenLyrics,
 }) => {
-  const [hoverSeekTime, setHoverSeekTime] = useState<number | null>(null);
-  const [hoverX, setHoverX] = useState<number>(0);
-
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds) || seconds < 0) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
-
-  const handleProgressBarHover = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    setHoverSeekTime(ratio * duration);
-    setHoverX(e.clientX - rect.left);
-  };
-
-  const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!currentTrack || duration <= 0) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeek(ratio * duration);
-  };
-
   const rates = [0.75, 1.0, 1.25, 1.5, 2.0];
   const nextRate = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
 
   return (
-    <footer className="sticky bottom-0 sm:bottom-3 left-0 right-0 z-40 w-full sm:px-4 px-0 select-none shrink-0 pointer-events-none pb-[env(safe-area-inset-bottom,16px)] sm:pb-0">
-      <div className="pointer-events-auto mx-auto max-w-5xl bg-[#141416]/95 sm:bg-[#16161a]/90 backdrop-blur-2xl border-t sm:border border-white/[0.1] sm:rounded-2xl shadow-2xl shadow-black/80 px-3 sm:px-5 py-2 sm:py-2.5 h-[76px] sm:h-20 flex items-center justify-between gap-3 sm:gap-6 relative">
-        {/* Mobile Top Scrubber Bar */}
-        <div 
-          className="sm:hidden absolute top-0 left-0 right-0 h-1 bg-white/10 cursor-pointer overflow-hidden touch-manipulation"
-          onClick={handleProgressBarClick}
-        >
-          <div 
-            className="h-full bg-rose-500 transition-all"
-            style={{ width: `${progressPercent}%` }}
+    <footer className="sticky bottom-0 sm:bottom-4 left-0 right-0 z-40 w-full sm:px-6 px-0 select-none shrink-0 pointer-events-none pb-[env(safe-area-inset-bottom,16px)] sm:pb-0">
+      <div className="pointer-events-auto mx-auto max-w-7xl bg-[#0a0a0a]/95 backdrop-blur-xl border-t sm:border border-white/10 sm:rounded-2xl shadow-2xl shadow-black/90 px-3.5 sm:px-6 py-2 sm:py-3 h-[74px] sm:h-[84px] flex sm:grid sm:grid-cols-[1fr_2fr_1fr] items-center justify-between sm:justify-items-stretch gap-3 sm:gap-6 relative">
+        {/* Mobile Top Scrubber Bar (Interactive touch scrubbing & tap-to-seek) */}
+        <div className="sm:hidden absolute -top-1.5 left-0 right-0 z-20 px-0">
+          <AudioSeeker
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={onSeek}
+            layout="minimal"
+            accentColor="rose"
           />
         </div>
 
-        {/* 1. Track Info (Left) */}
-        <div className="flex items-center gap-2.5 sm:gap-3 flex-1 sm:flex-initial sm:w-1/4 sm:min-w-[190px] sm:max-w-xs min-w-0">
+        {/* 1. Track Info (Left - Column 1) */}
+        <div className="flex items-center gap-3 sm:gap-3.5 flex-1 sm:flex-initial sm:min-w-[180px] sm:max-w-[280px] sm:justify-self-start min-w-0 pb-[15px]">
           {currentTrack ? (
             <>
               <div 
                 onClick={onOpenFullscreen}
-                className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg ring-1 ring-white/10 bg-white/[0.04] overflow-hidden relative group cursor-pointer shrink-0 shadow-md flex items-center justify-center touch-manipulation"
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl ring-1 ring-white/10 bg-white/[0.04] overflow-hidden relative group cursor-pointer shrink-0 shadow-md flex items-center justify-center touch-manipulation"
                 title="Expand Fullscreen (F)"
               >
                 {currentTrack.coverDataUrl ? (
@@ -124,7 +99,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                 </div>
               </div>
 
-              <div className="min-w-0 pr-1 flex-1">
+              <div className="flex flex-col justify-center min-w-0 pr-1 flex-1">
                 <div 
                   onClick={onOpenFullscreen}
                   className="text-xs sm:text-[13px] font-semibold text-white tracking-tight truncate hover:text-rose-400 cursor-pointer transition-colors"
@@ -135,20 +110,10 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                   {currentTrack.artist}
                 </div>
               </div>
-
-              <button
-                onClick={() => onToggleFavorite(currentTrack)}
-                className={`p-2 min-w-[36px] min-h-[36px] rounded-full hover:bg-white/[0.06] transition-colors shrink-0 hidden sm:flex items-center justify-center ${
-                  currentTrack.isFavorite ? 'text-rose-500' : 'text-zinc-400 hover:text-white'
-                }`}
-                title={currentTrack.isFavorite ? 'Favorited' : 'Add to Favorites'}
-              >
-                <Heart size={16} fill={currentTrack.isFavorite ? 'currentColor' : 'none'} />
-              </button>
             </>
           ) : (
-            <div className="flex items-center gap-2.5 text-zinc-500 text-xs">
-              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg ring-1 ring-white/10 bg-white/[0.04] flex items-center justify-center shrink-0">
+            <div className="flex items-center gap-3 text-zinc-500 text-xs">
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl ring-1 ring-white/10 bg-white/[0.04] flex items-center justify-center shrink-0">
                 <Music size={16} className="opacity-40" />
               </div>
               <span className="truncate text-zinc-400 text-xs">Not Playing</span>
@@ -156,10 +121,10 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           )}
         </div>
 
-        {/* 2. Controls & Scrubber (Center - Desktop & Tablets sm+) */}
-        <div className="hidden sm:flex flex-col items-center gap-1.5 flex-1 max-w-xl px-2">
-          {/* Buttons Row */}
-          <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* 2. Controls & Seeker (Center - Column 2) */}
+        <div className="hidden sm:flex flex-col items-center justify-center w-full max-w-xl mx-auto gap-1 justify-self-center px-2">
+          {/* Controls Row: Centered 5-button transport controls with 20px (gap-5) spacing */}
+          <div className="flex items-center justify-center gap-4 sm:gap-5">
             {/* Shuffle */}
             <button
               onClick={onToggleShuffle}
@@ -168,7 +133,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               }`}
               title={`Shuffle: ${isShuffle ? 'On' : 'Off'} (S)`}
             >
-              <Shuffle size={16} />
+              <Shuffle size={17} />
             </button>
 
             {/* Previous */}
@@ -189,9 +154,9 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               title="Play / Pause (Space)"
             >
               {isPlaying ? (
-                <Pause size={18} fill="currentColor" />
+                <Pause size={19} fill="currentColor" />
               ) : (
-                <Play size={18} fill="currentColor" className="ml-0.5" />
+                <Play size={19} fill="currentColor" className="ml-0.5" />
               )}
             </button>
 
@@ -213,65 +178,24 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               }`}
               title={`Repeat: ${repeatMode} (L)`}
             >
-              <Repeat size={16} />
+              <Repeat size={17} />
               {repeatMode === 'one' && (
                 <span className="absolute top-1.5 right-1.5 text-[8px] font-bold bg-rose-500 text-white rounded-full w-3 h-3 flex items-center justify-center">
                   1
                 </span>
               )}
             </button>
-
-            {/* Speed Toggle */}
-            <button
-              onClick={() => onChangePlaybackRate(nextRate)}
-              className="text-[10px] font-mono px-2 py-0.5 bg-white/[0.06] hover:bg-white/10 text-zinc-400 hover:text-white rounded-full transition-colors"
-              title="Playback Speed"
-            >
-              {playbackRate}x
-            </button>
           </div>
 
-          {/* Apple-style Scrubbing Row */}
-          <div className="w-full flex items-center gap-2.5">
-            <span className="text-[10px] text-zinc-400 font-mono tabular-nums w-8 text-right shrink-0">
-              {formatTime(currentTime)}
-            </span>
-
-            <div
-              className="flex-1 h-3 flex items-center cursor-pointer group relative touch-manipulation"
-              onMouseMove={handleProgressBarHover}
-              onMouseLeave={() => setHoverSeekTime(null)}
-              onClick={handleProgressBarClick}
-            >
-              {/* Ultra-thin Apple progress track that subtly expands on hover */}
-              <div className="w-full h-[3px] group-hover:h-[5px] bg-white/15 rounded-full overflow-hidden transition-all">
-                <div
-                  className="h-full bg-white relative transition-all group-hover:bg-rose-500"
-                  style={{ width: `${progressPercent}%` }}
-                />
-              </div>
-
-              {/* Scrubber Thumb Knob */}
-              <div
-                className="absolute w-2.5 h-2.5 bg-white rounded-full shadow-md scale-0 group-hover:scale-100 transition-transform pointer-events-none -translate-x-1/2 -translate-y-1/2 top-1/2"
-                style={{ left: `${progressPercent}%` }}
-              />
-
-              {/* Hover Tooltip */}
-              {hoverSeekTime !== null && (
-                <div
-                  className="absolute -top-6 px-1.5 py-0.5 bg-[#1c1c1e] border border-white/10 rounded-md text-[10px] font-mono text-white shadow-xl -translate-x-1/2 pointer-events-none"
-                  style={{ left: `${hoverX}px` }}
-                >
-                  {formatTime(hoverSeekTime)}
-                </div>
-              )}
-            </div>
-
-            <span className="text-[10px] text-zinc-400 font-mono tabular-nums w-8 shrink-0">
-              {formatTime(duration)}
-            </span>
-          </div>
+          {/* Timeline Row */}
+          <AudioSeeker
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={onSeek}
+            layout="inline"
+            accentColor="rose"
+            className="w-full"
+          />
         </div>
 
         {/* 3. Mobile Compact Play & Next Controls (48x48px tap targets, sm:hidden) */}
@@ -318,8 +242,17 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           </button>
         </div>
 
-        {/* 4. Desktop Extras & Volume (sm and above) */}
-        <div className="hidden sm:flex items-center justify-end gap-1.5 sm:w-1/4 sm:min-w-[190px] sm:max-w-xs shrink-0">
+        {/* 4. Desktop Extras & Volume (Anchor Right - Column 3) */}
+        <div className="hidden sm:flex items-center justify-end gap-2.5 justify-self-end shrink-0 pb-[15px]">
+          {/* Playback Speed */}
+          <button
+            onClick={() => onChangePlaybackRate(nextRate)}
+            className="text-[10px] font-mono px-2 py-0.5 bg-white/[0.06] hover:bg-white/10 text-zinc-400 hover:text-white rounded-full transition-colors mr-0.5"
+            title="Playback Speed"
+          >
+            {playbackRate}x
+          </button>
+
           {/* Sleep Timer */}
           <button
             onClick={onOpenSleepTimer}
@@ -333,24 +266,6 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             <Timer size={17} />
             {sleepTimer.isActive && (
               <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-            )}
-          </button>
-
-          {/* Queue Drawer */}
-          <button
-            onClick={onToggleQueue}
-            className={`w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/[0.06] transition-colors relative ${
-              isQueueOpen
-                ? 'text-rose-500'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-            title="Up Next Queue (Q)"
-          >
-            <ListMusic size={17} />
-            {queueCount > 0 && (
-              <span className="absolute top-1.5 right-1 px-1 py-0.2 bg-rose-500 text-[8px] font-bold font-mono text-white rounded-full min-w-3.5 text-center">
-                {queueCount}
-              </span>
             )}
           </button>
 
@@ -378,7 +293,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           </button>
 
           {/* Integrated Volume Slider with Fluid Dragging */}
-          <div className="hidden md:flex items-center gap-1 group pl-1">
+          <div className="hidden md:flex items-center gap-1.5 group pl-1">
             <button
               onClick={onToggleMute}
               className="w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center text-zinc-400 hover:text-white rounded-full transition-colors"

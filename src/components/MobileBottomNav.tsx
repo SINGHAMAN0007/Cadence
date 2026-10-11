@@ -1,5 +1,5 @@
 import React from 'react';
-import { Music, Heart, Folder, Timer, ListMusic } from 'lucide-react';
+import { Music, Heart, Folder, Timer, Radio } from 'lucide-react';
 import type { SleepTimerState } from '../types';
 
 interface MobileBottomNavProps {
@@ -7,9 +7,10 @@ interface MobileBottomNavProps {
   onSelectView: (view: 'library' | 'favorites' | 'recent' | { playlistId: number }) => void;
   onOpenPlaylistsDrawer: () => void;
   onOpenSleepTimer: () => void;
-  onOpenQueue: () => void;
+  onOpenQueue?: () => void;
+  onOpenIdentifyModal?: () => void;
   sleepTimer: SleepTimerState;
-  queueCount: number;
+  queueCount?: number;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -17,16 +18,15 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   onSelectView,
   onOpenPlaylistsDrawer,
   onOpenSleepTimer,
-  onOpenQueue,
+  onOpenIdentifyModal,
   sleepTimer,
-  queueCount,
 }) => {
   const isLibrary = currentView === 'library' || currentView === 'recent';
   const isFavorites = currentView === 'favorites';
   const isPlaylist = typeof currentView === 'object';
 
   return (
-    <nav className="sm:hidden h-[calc(3.75rem+env(safe-area-inset-bottom,16px))] pb-[env(safe-area-inset-bottom,16px)] bg-[#0d0d0f]/90 border-t border-white/[0.08] px-2 flex items-center justify-around z-30 select-none shrink-0 backdrop-blur-2xl touch-manipulation">
+    <nav className="sm:hidden h-[calc(3.75rem+env(safe-area-inset-bottom,16px))] pb-[env(safe-area-inset-bottom,16px)] bg-black border-t border-neutral-900/80 px-3 flex items-center justify-around z-30 select-none shrink-0 backdrop-blur-2xl touch-manipulation">
       {/* Library (>= 48x48 tap target) */}
       <button
         onClick={() => onSelectView('library')}
@@ -63,6 +63,18 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         <span className="text-[10px] mt-0.5 tracking-tight">Playlists</span>
       </button>
 
+      {/* Identify Song (>= 48x48 tap target) */}
+      {onOpenIdentifyModal && (
+        <button
+          onClick={onOpenIdentifyModal}
+          className="flex flex-col items-center justify-center min-w-[48px] min-h-[48px] px-2 rounded-xl active:bg-white/10 transition-colors text-rose-400 hover:text-rose-300 relative"
+          aria-label="Identify Song"
+        >
+          <Radio size={19} className="animate-pulse" />
+          <span className="text-[10px] mt-0.5 tracking-tight font-medium text-rose-300">Identify</span>
+        </button>
+      )}
+
       {/* Sleep Timer (>= 48x48 tap target) */}
       <button
         onClick={onOpenSleepTimer}
@@ -76,21 +88,6 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           <span className="absolute top-1.5 right-2.5 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
         )}
         <span className="text-[10px] mt-0.5 tracking-tight">Timer</span>
-      </button>
-
-      {/* Queue (>= 48x48 tap target) */}
-      <button
-        onClick={onOpenQueue}
-        className="flex flex-col items-center justify-center min-w-[48px] min-h-[48px] px-2 rounded-xl active:bg-white/10 transition-colors text-zinc-400 hover:text-zinc-200 relative"
-        aria-label="Up Next Queue"
-      >
-        <ListMusic size={19} />
-        {queueCount > 0 && (
-          <span className="absolute top-1 right-2 px-1 bg-rose-500 text-[8px] font-bold font-mono text-white rounded-full min-w-3 text-center">
-            {queueCount}
-          </span>
-        )}
-        <span className="text-[10px] mt-0.5 tracking-tight">Queue</span>
       </button>
     </nav>
   );

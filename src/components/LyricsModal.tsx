@@ -249,7 +249,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#0d0d0f] flex flex-col justify-between select-none animate-in fade-in duration-200 touch-manipulation overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between select-none animate-in fade-in duration-200 touch-manipulation overflow-hidden">
       {/* Dynamic blurred album art backdrop */}
       {currentTrack.coverDataUrl ? (
         <div 
@@ -257,9 +257,9 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({
           style={{ backgroundImage: `url(${currentTrack.coverDataUrl})` }}
         />
       ) : (
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-rose-950/20 via-[#0d0d0f] to-[#0d0d0f] pointer-events-none" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-rose-950/20 via-black to-black pointer-events-none" />
       )}
-      <div className="absolute inset-0 bg-[#0d0d0f]/65 backdrop-blur-3xl pointer-events-none" />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-3xl pointer-events-none" />
 
       {/* Top Header Bar */}
       <header className="relative z-20 h-16 sm:h-20 px-4 sm:px-8 pt-[max(0.75rem,env(safe-area-inset-top,0px))] flex items-center justify-between border-b border-white/[0.08] bg-white/[0.02] backdrop-blur-2xl shrink-0">
@@ -477,7 +477,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({
       </main>
 
       {/* Bottom Floating Control Bar */}
-      <footer className="relative z-20 px-4 sm:px-8 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] border-t border-white/[0.08] bg-[#141416]/90 backdrop-blur-2xl shrink-0">
+      <footer className="relative z-20 px-4 sm:px-8 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] border-t border-neutral-900 bg-black/95 backdrop-blur-2xl shrink-0">
         <div className="max-w-2xl mx-auto space-y-2">
           {/* Scrubber Progress Track */}
           <div className="space-y-1">
@@ -543,7 +543,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({
       {/* Lyrics Editor Modal Overlay */}
       {isEditorOpen && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
-          <div className="w-full max-w-lg bg-[#1c1c1e]/98 border border-white/15 rounded-3xl shadow-2xl p-6 text-white flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-150">
+          <div className="w-full max-w-lg bg-[#0a0a0a] border border-white/15 rounded-3xl shadow-2xl p-6 text-white flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-white/10 shrink-0">
               <div className="flex items-center gap-2">
                 <Quote size={18} className="text-rose-400 rotate-180" />

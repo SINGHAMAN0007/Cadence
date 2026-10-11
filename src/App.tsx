@@ -8,7 +8,7 @@ import { db } from './services/db';
 import { parseAudioMetadata } from './services/metadata';
 import { createDemoSynthwaveTrack, createDemoChillAmbientTrack, createDemoCosmicPulseTrack } from './services/demoTracks';
 import type { 
-  Track, Playlist, RepeatMode, VisualizerMode, 
+  Track, Playlist, RepeatMode, 
   SortField, SortOrder, SleepTimerState 
 } from './types';
 
@@ -26,7 +26,28 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ImportModal } from './components/ImportModal';
 import { LyricsModal } from './components/LyricsModal';
+import { ClassificationWizardModal, type PendingImportItem } from './components/ClassificationWizardModal';
+import { SongRecognitionModal } from './components/SongRecognitionModal';
+import { CategoryFilterBar } from './components/CategoryFilterBar';
+import { AccountModal } from './components/AccountModal';
+import { ListenTogetherModal } from './components/ListenTogetherModal';
+import { AboutModal } from './components/AboutModal';
+import { classifyTrackWithHeuristics } from './services/classifierService';
 import { DEMO_LYRICS } from './services/lyricsService';
+import { 
+  auth, 
+  testConnection, 
+  syncUserMetadataToCloud, 
+  fetchUserCloudMetadata,
+  createPlaybackSession,
+  updateSessionPlayback,
+  findSessionByRoomCode,
+  subscribeToSession,
+  endPlaybackSession,
+  DEVICE_ID,
+  type PlaybackSessionData
+} from './services/firebase';
+import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
 
 export default function App() {
   // --- Data State ---
@@ -61,9 +82,10 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedGenre, setSelectedGenre] = useState<string>('All');
 
-  // --- Visualizer & Modes ---
-  const [visualizerMode, setVisualizerMode] = useState<VisualizerMode>('bars');
+  // --- Visualizer & Fullscreen Player ---
   const [isFullscreenOpen, setIsFullscreenOpen] = useState<boolean>(false);
 
   // --- Sleep Timer ---
@@ -76,7 +98,12 @@ export default function App() {
   const [isSleepModalOpen, setIsSleepModalOpen] = useState<boolean>(false);
 
   // --- Modals & Overlays ---
+  const [activeMenuTrackId, setActiveMenuTrackId] = useState<number | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [isIdentifyModalOpen, setIsIdentifyModalOpen] = useState<boolean>(false);
+  const [isClassificationWizardOpen, setIsClassificationWizardOpen] = useState<boolean>(false);
+  const [pendingImportTracks, setPendingImportTracks] = useState<PendingImportItem[]>([]);
+  const [editingClassificationTrack, setEditingClassificationTrack] = useState<Track | null>(null);
   const [playlistModalOpen, setPlaylistModalOpen] = useState<boolean>(false);
   const [editingPlaylist, setEditingPlaylist] = useState<Playlist | null>(null);
   const [inspectingTrack, setInspectingTrack] = useState<Track | null>(null);
@@ -84,6 +111,16 @@ export default function App() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isWindowDragOver, setIsWindowDragOver] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+
+  // --- Firebase Cloud Account & Real-Time Sync State ---
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
+  const [isListenTogetherOpen, setIsListenTogetherOpen] = useState<boolean>(false);
+  const [isAboutModalOpen, setIsAboutModalOpen] = useState<boolean>(false);
+  const [activeSession, setActiveSession] = useState<PlaybackSessionData | null>(null);
+  const [isHost, setIsHost] = useState<boolean>(false);
+  const [syncWithHostEnabled, setSyncWithHostEnabled] = useState<boolean>(true);
+  const [mobileSortOpen, setMobileSortOpen] = useState<boolean>(false);
 
   // --- Confirmation Dialog ---
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -209,7 +246,7 @@ export default function App() {
 
           try {
             const analyser = ctx.createAnalyser();
-            analyser.fftSize = 128;
+            analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.8;
             analyserRef.current = analyser;
 
@@ -257,6 +294,81 @@ export default function App() {
     loadDatabase();
   }, [loadDatabase]);
 
+  // Cloud Metadata Synchronization (Favorites & Playlists)
+  const syncLocalMetadataWithCloud = useCallback(async (userToSync?: FirebaseUser | null) => {
+    const user = userToSync ?? currentUser;
+    if (!user) return;
+    try {
+      const cloud = await fetchUserCloudMetadata();
+      if (cloud) {
+        let changed = false;
+        if (cloud.favoriteTrackKeys && cloud.favoriteTrackKeys.length > 0) {
+          const currentTracks = await db.tracks.toArray();
+          for (const t of currentTracks) {
+            const key = `${t.title}:::${t.artist}`;
+            if (cloud.favoriteTrackKeys.includes(key) && !t.isFavorite) {
+              await db.tracks.update(t.id, { isFavorite: true });
+              changed = true;
+            }
+          }
+        }
+        if (cloud.playlistMetadata && cloud.playlistMetadata.length > 0) {
+          const currentPlaylists = await db.playlists.toArray();
+          const existingNames = new Set(currentPlaylists.map(p => p.name));
+          const allTracks = await db.tracks.toArray();
+          for (const pl of cloud.playlistMetadata) {
+            if (!existingNames.has(pl.name)) {
+              const matchedIds = allTracks
+                .filter(t => pl.trackTitles?.includes(t.title))
+                .map(t => t.id);
+              await db.playlists.add({
+                name: pl.name,
+                description: pl.description || '',
+                createdAt: pl.createdAt || Date.now(),
+                trackIds: matchedIds,
+              } as Playlist);
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          await loadDatabase();
+        }
+      }
+
+      // Push local metadata back to cloud for backup
+      const allLocalTracks = await db.tracks.toArray();
+      const allLocalPlaylists = await db.playlists.toArray();
+      const favKeys = allLocalTracks.filter(t => t.isFavorite).map(t => `${t.title}:::${t.artist}`);
+      const plMetadata = allLocalPlaylists.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        createdAt: p.createdAt,
+        trackTitles: p.trackIds.map(id => allLocalTracks.find(t => t.id === id)?.title).filter(Boolean) as string[],
+      }));
+
+      await syncUserMetadataToCloud({
+        favoriteTrackKeys: favKeys,
+        playlistMetadata: plMetadata,
+      });
+    } catch (err) {
+      console.warn('Metadata sync note:', err);
+    }
+  }, [currentUser, loadDatabase]);
+
+  // Firebase Auth persistence & connectivity verification
+  useEffect(() => {
+    testConnection();
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      if (user) {
+        syncLocalMetadataWithCloud(user);
+      }
+    });
+    return () => unsub();
+  }, [syncLocalMetadataWithCloud]);
+
   // --- Play Track Logic (Zero Data Playback strictly via local Blob URLs) ---
   const playTrack = useCallback((track: Track, newQueue?: Track[]) => {
     const audio = audioRef.current;
@@ -272,8 +384,17 @@ export default function App() {
 
     try {
       const audioBlob = track.blob || track.file;
-      if (!audioBlob) {
-        throw new Error('No local audio binary available');
+      if (!audioBlob || audioBlob.size === 0) {
+        if (track.lyrics && track.lyrics.includes('music.youtube.com')) {
+          const match = track.lyrics.match(/https:\/\/music\.youtube\.com[^\s\n]+/);
+          if (match) {
+            window.open(match[0], '_blank');
+            showToast(`Opening "${track.title}" in YouTube Music...`, 'info');
+            return;
+          }
+        }
+        showToast(`"${track.title}" is saved in Wishlist (bookmark).`, 'info');
+        return;
       }
 
       const url = URL.createObjectURL(audioBlob);
@@ -306,6 +427,18 @@ export default function App() {
         setQueue(newQueue);
       }
 
+      // Broadcast to Listen Together session if hosting
+      if (isHost && activeSession) {
+        updateSessionPlayback(activeSession.id, {
+          trackTitle: track.title,
+          trackArtist: track.artist,
+          trackAlbum: track.album,
+          trackDuration: track.duration,
+          isPlaying: true,
+          timestamp: 0,
+        }).catch(console.warn);
+      }
+
       // Android Notification & Media Session API
       if ('mediaSession' in navigator) {
         try {
@@ -336,7 +469,7 @@ export default function App() {
       console.error('Error creating track URL:', err);
       showToast('Failed to load track file', 'error');
     }
-  }, [setupWebAudioAnalyser, playbackRate, isMuted, userVolume, currentTrack, showToast]);
+  }, [setupWebAudioAnalyser, playbackRate, isMuted, userVolume, currentTrack, showToast, isHost, activeSession]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -354,16 +487,28 @@ export default function App() {
     if (isPlaying) {
       audio.pause();
       setIsPlaying(false);
+      if (isHost && activeSession) {
+        updateSessionPlayback(activeSession.id, {
+          isPlaying: false,
+          timestamp: audio.currentTime,
+        }).catch(console.warn);
+      }
     } else {
       audio.play().then(() => {
         setIsPlaying(true);
+        if (isHost && activeSession) {
+          updateSessionPlayback(activeSession.id, {
+            isPlaying: true,
+            timestamp: audio.currentTime,
+          }).catch(console.warn);
+        }
       }).catch(err => {
         if (err.name !== 'AbortError') {
           console.warn('Error starting audio:', err);
         }
       });
     }
-  }, [currentTrack, library, isPlaying, playTrack, setupWebAudioAnalyser]);
+  }, [currentTrack, library, isPlaying, playTrack, setupWebAudioAnalyser, isHost, activeSession]);
 
   // --- Volume Changes ---
   const handleVolumeChange = useCallback((newVol: number) => {
@@ -394,8 +539,14 @@ export default function App() {
     if (audioRef.current) {
       audioRef.current.currentTime = seekTime;
       setCurrentTime(seekTime);
+      if (isHost && activeSession) {
+        updateSessionPlayback(activeSession.id, {
+          timestamp: seekTime,
+          isPlaying,
+        }).catch(console.warn);
+      }
     }
-  }, []);
+  }, [isHost, activeSession, isPlaying]);
 
   const handleChangePlaybackRate = useCallback((rate: number) => {
     setPlaybackRate(rate);
@@ -403,6 +554,142 @@ export default function App() {
       audioRef.current.playbackRate = rate;
     }
   }, []);
+
+  // --- Listen Together Session Subscription & Control ---
+  useEffect(() => {
+    if (!activeSession?.id) return;
+
+    const unsub = subscribeToSession(activeSession.id, (remoteSession) => {
+      if (!remoteSession || remoteSession.status === 'ended') {
+        setActiveSession(null);
+        setIsHost(false);
+        showToast('Listen Together session ended', 'info');
+        return;
+      }
+
+      if (isHost) {
+        return;
+      }
+
+      if (remoteSession.updatedByDeviceId === DEVICE_ID) {
+        return;
+      }
+
+      setActiveSession(remoteSession);
+
+      if (!syncWithHostEnabled) return;
+
+      const audio = audioRef.current;
+      if (!audio) return;
+
+      // Check for local file in IndexedDB matching host's track
+      if (remoteSession.trackTitle) {
+        const matchingTrack = library.find(t =>
+          t.title.toLowerCase() === remoteSession.trackTitle?.toLowerCase() &&
+          (!remoteSession.trackArtist || t.artist.toLowerCase() === remoteSession.trackArtist?.toLowerCase())
+        ) || library.find(t =>
+          t.title.toLowerCase() === remoteSession.trackTitle?.toLowerCase()
+        );
+
+        if (matchingTrack) {
+          if (!currentTrack || currentTrack.id !== matchingTrack.id) {
+            playTrack(matchingTrack);
+            setTimeout(() => {
+              if (audioRef.current) {
+                audioRef.current.currentTime = remoteSession.timestamp;
+                setCurrentTime(remoteSession.timestamp);
+                if (remoteSession.isPlaying && audioRef.current.paused) {
+                  audioRef.current.play().catch(() => {});
+                  setIsPlaying(true);
+                } else if (!remoteSession.isPlaying && !audioRef.current.paused) {
+                  audioRef.current.pause();
+                  setIsPlaying(false);
+                }
+              }
+            }, 300);
+            return;
+          }
+        }
+      }
+
+      // Synchronize playhead drift
+      if (Math.abs(audio.currentTime - remoteSession.timestamp) > 2.0) {
+        audio.currentTime = remoteSession.timestamp;
+        setCurrentTime(remoteSession.timestamp);
+      }
+
+      // Synchronize play / pause state
+      if (remoteSession.isPlaying && audio.paused && currentTrack) {
+        audio.play().catch(() => {});
+        setIsPlaying(true);
+      } else if (!remoteSession.isPlaying && !audio.paused) {
+        audio.pause();
+        setIsPlaying(false);
+      } else if (!currentTrack) {
+        // Virtual cloud mirroring
+        setIsPlaying(remoteSession.isPlaying);
+        setCurrentTime(remoteSession.timestamp);
+        if (remoteSession.trackDuration) {
+          setDuration(remoteSession.trackDuration);
+        }
+      }
+    });
+
+    return () => unsub();
+  }, [activeSession?.id, isHost, syncWithHostEnabled, library, currentTrack, playTrack, showToast]);
+
+  const handleStartHosting = async () => {
+    if (!currentUser) {
+      setIsAccountModalOpen(true);
+      return;
+    }
+    const session = await createPlaybackSession(
+      currentTrack ? {
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        album: currentTrack.album,
+        duration: currentTrack.duration,
+      } : undefined,
+      isPlaying,
+      currentTime
+    );
+    if (session) {
+      setActiveSession(session);
+      setIsHost(true);
+      showToast(`Hosting live room ${session.roomCode}! Code copied to share.`, 'success');
+      try {
+        navigator.clipboard.writeText(session.roomCode);
+      } catch {}
+    }
+  };
+
+  const handleJoinSession = async (roomCode: string): Promise<boolean> => {
+    if (!currentUser) {
+      setIsAccountModalOpen(true);
+      return false;
+    }
+    const session = await findSessionByRoomCode(roomCode);
+    if (!session) return false;
+
+    setActiveSession(session);
+    setIsHost(false);
+    setSyncWithHostEnabled(true);
+    showToast(`Joined session ${session.roomCode} hosted by ${session.hostDisplayName}`, 'success');
+    return true;
+  };
+
+  const handleLeaveSession = async () => {
+    if (activeSession) {
+      if (isHost) {
+        await endPlaybackSession(activeSession.id);
+        showToast('Ended live session', 'info');
+      } else {
+        showToast('Left live session', 'info');
+      }
+      setActiveSession(null);
+      setIsHost(false);
+    }
+  };
 
   // --- Filtered & Sorted Tracks ---
   const visibleTracks = useMemo(() => {
@@ -432,6 +719,16 @@ export default function App() {
       );
     }
 
+    // Category filter
+    if (selectedCategory !== 'All') {
+      list = list.filter(t => t.category === selectedCategory);
+    }
+
+    // Genre filter
+    if (selectedGenre !== 'All') {
+      list = list.filter(t => t.genre === selectedGenre);
+    }
+
     // Sort order
     const isCustomPlaylistOrder = typeof currentView === 'object' && !searchQuery.trim();
     if (!isCustomPlaylistOrder) {
@@ -447,7 +744,31 @@ export default function App() {
     }
 
     return list;
-  }, [library, playlists, currentView, searchQuery, sortField, sortOrder]);
+  }, [library, playlists, currentView, searchQuery, sortField, sortOrder, selectedCategory, selectedGenre]);
+
+  // Aggregate category and genre counts for dynamic filter chips
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { Hindi: 0, English: 0, Phonk: 0 };
+    for (const t of library) {
+      if (t.category && t.category in counts) {
+        counts[t.category]++;
+      }
+    }
+    return counts;
+  }, [library]);
+
+  const genreCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of library) {
+      if (t.genre) {
+        // If a category is selected, only count genres within that category
+        if (selectedCategory === 'All' || t.category === selectedCategory) {
+          counts[t.genre] = (counts[t.genre] || 0) + 1;
+        }
+      }
+    }
+    return counts;
+  }, [library, selectedCategory]);
 
   // --- Next & Previous Navigation ---
   const handleNext = useCallback(() => {
@@ -708,7 +1029,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [sleepTimer.isActive, sleepTimer.fadeOutEnabled, userVolume, isMuted, showToast]);
 
-  // --- Robust File Import Logic (Android & Desktop) ---
+  // --- Robust File Import Logic with Classification Wizard ---
   const processAndImportFiles = async (fileList: FileList | File[]) => {
     const rawFiles = Array.from(fileList);
     // Permissive filter so Android content URIs or downloads aren't accidentally rejected
@@ -727,7 +1048,7 @@ export default function App() {
 
     setIsImporting(true);
     setImportProgress({ current: 0, total: audioFiles.length });
-    let successCount = 0;
+    const collected: PendingImportItem[] = [];
 
     for (let i = 0; i < audioFiles.length; i++) {
       const file = audioFiles[i];
@@ -742,40 +1063,103 @@ export default function App() {
           storageBlob = file;
         }
 
-        const now = Date.now() + i;
-        const newTrack: Omit<Track, 'id'> = {
-          title: meta.title,
-          artist: meta.artist,
-          album: meta.album,
-          duration: meta.duration,
-          blob: storageBlob,
-          addedAt: now,
-          file: storageBlob,
-          createdAt: now,
-          format: meta.format || file.type || 'audio/mpeg',
-          size: file.size,
-          coverDataUrl: meta.coverDataUrl,
-          isFavorite: false,
-          bitrate: meta.bitrate,
-          sampleRate: meta.sampleRate,
-          lyrics: meta.lyrics,
-        };
+        const initialGuess = classifyTrackWithHeuristics(meta.title, meta.artist);
 
-        await db.tracks.add(newTrack as Track);
-        successCount++;
+        collected.push({
+          file: storageBlob,
+          meta: {
+            title: meta.title,
+            artist: meta.artist,
+            album: meta.album,
+            duration: meta.duration,
+            format: meta.format || file.type || 'audio/mpeg',
+            size: file.size,
+            coverDataUrl: meta.coverDataUrl,
+            bitrate: meta.bitrate,
+            sampleRate: meta.sampleRate,
+            lyrics: meta.lyrics,
+          },
+          category: initialGuess.category,
+          genre: initialGuess.genre,
+        });
       } catch (err) {
-        console.error(`Error importing ${file.name}:`, err);
+        console.error(`Error parsing ${file.name}:`, err);
       }
       setImportProgress({ current: i + 1, total: audioFiles.length });
     }
 
-    await loadDatabase();
     setIsImporting(false);
     setImportProgress(null);
-    if (successCount > 0) {
-      showToast(`Successfully added ${successCount} track${successCount !== 1 ? 's' : ''}`, 'success');
+
+    if (collected.length > 0) {
+      setPendingImportTracks(collected);
+      setEditingClassificationTrack(null);
+      setIsClassificationWizardOpen(true);
     } else {
-      showToast('Could not import selected files', 'error');
+      showToast('Could not parse audio files', 'error');
+    }
+  };
+
+  const handleConfirmImportClassification = async (taggedTracks: PendingImportItem[]) => {
+    let successCount = 0;
+    const nowBase = Date.now();
+
+    for (let i = 0; i < taggedTracks.length; i++) {
+      const item = taggedTracks[i];
+      const now = nowBase + i;
+      const newTrack: Omit<Track, 'id'> = {
+        title: item.meta.title,
+        artist: item.meta.artist,
+        album: item.meta.album,
+        duration: item.meta.duration,
+        blob: item.file,
+        addedAt: now,
+        file: item.file,
+        createdAt: now,
+        format: item.meta.format,
+        size: item.meta.size,
+        coverDataUrl: item.meta.coverDataUrl,
+        isFavorite: false,
+        bitrate: item.meta.bitrate,
+        sampleRate: item.meta.sampleRate,
+        lyrics: item.meta.lyrics,
+        category: item.category,
+        genre: item.genre,
+      };
+
+      try {
+        await db.tracks.add(newTrack as Track);
+        successCount++;
+      } catch (err) {
+        console.error('Failed to save classified track in IndexedDB:', err);
+      }
+    }
+
+    await loadDatabase();
+    if (successCount > 0) {
+      showToast(`Successfully added ${successCount} track${successCount !== 1 ? 's' : ''} to library`, 'success');
+    }
+  };
+
+  const handleOpenEditClassification = (track: Track) => {
+    setEditingClassificationTrack(track);
+    setPendingImportTracks([]);
+    setIsClassificationWizardOpen(true);
+  };
+
+  const handleConfirmEditClassification = async (trackId: number, category?: string, genre?: string) => {
+    try {
+      await db.tracks.update(trackId, { category, genre });
+      setLibrary(prev =>
+        prev.map(t => (t.id === trackId ? { ...t, category, genre } : t))
+      );
+      if (currentTrack && currentTrack.id === trackId) {
+        setCurrentTrack(prev => (prev ? { ...prev, category, genre } : null));
+      }
+      showToast('Updated Category & Genre tags', 'success');
+    } catch (err) {
+      console.error('Failed to update track classification:', err);
+      showToast('Failed to update tags', 'error');
     }
   };
 
@@ -827,6 +1211,8 @@ export default function App() {
           bitrate: 1411200,
           sampleRate: 44100,
           lyrics: DEMO_LYRICS['Neon Horizon'],
+          category: 'Phonk',
+          genre: 'Drift Phonk',
         },
         {
           title: 'Midnight Rain Lofi',
@@ -843,6 +1229,8 @@ export default function App() {
           bitrate: 1411200,
           sampleRate: 44100,
           lyrics: DEMO_LYRICS['Midnight Rain Lofi'],
+          category: 'English',
+          genre: 'Lo-Fi',
         },
         {
           title: 'Deep Space Drive',
@@ -859,6 +1247,8 @@ export default function App() {
           bitrate: 1411200,
           sampleRate: 44100,
           lyrics: DEMO_LYRICS['Deep Space Drive'],
+          category: 'English',
+          genre: 'EDM',
         },
       ];
 
@@ -883,6 +1273,9 @@ export default function App() {
     setLibrary(prev => prev.map(t => t.id === track.id ? { ...t, isFavorite: updatedFav } : t));
     if (currentTrack?.id === track.id) {
       setCurrentTrack(prev => prev ? { ...prev, isFavorite: updatedFav } : null);
+    }
+    if (currentUser) {
+      syncLocalMetadataWithCloud(currentUser);
     }
   };
 
@@ -919,6 +1312,11 @@ export default function App() {
     showToast(`Added "${track.title}" to queue`, 'info');
   };
 
+  const handlePlayNext = (track: Track) => {
+    setQueue(prev => [track, ...prev]);
+    showToast(`"${track.title}" will play next`, 'info');
+  };
+
   // --- Playlist Actions ---
   const handleSavePlaylist = async (name: string, description: string, coverColor: string) => {
     if (editingPlaylist) {
@@ -938,6 +1336,9 @@ export default function App() {
     }
     setEditingPlaylist(null);
     await loadDatabase();
+    if (currentUser) {
+      syncLocalMetadataWithCloud(currentUser);
+    }
   };
 
   const handleDeletePlaylist = (playlistId: number) => {
@@ -952,6 +1353,9 @@ export default function App() {
           setCurrentView('library');
         }
         await loadDatabase();
+        if (currentUser) {
+          syncLocalMetadataWithCloud(currentUser);
+        }
         showToast('Playlist deleted', 'info');
       },
     });
@@ -987,6 +1391,70 @@ export default function App() {
     updatedIds.splice(toIdx, 0, moved);
     await db.playlists.update(playlistId, { trackIds: updatedIds });
     await loadDatabase();
+  };
+
+  // --- Song Recognition Wishlist Action ---
+  const handleSaveIdentifiedTrackToWishlist = async (song: {
+    title: string;
+    artist: string;
+    album?: string;
+    artworkUrl?: string | null;
+    ytMusicUrl: string;
+  }) => {
+    try {
+      // 1. Check if track already exists in library
+      const existingTrack = library.find(
+        t => t.title.toLowerCase() === song.title.toLowerCase() && t.artist.toLowerCase() === song.artist.toLowerCase()
+      );
+      let trackId: number;
+
+      if (existingTrack) {
+        trackId = existingTrack.id;
+      } else {
+        const newTrack: Omit<Track, 'id'> = {
+          title: song.title,
+          artist: song.artist,
+          album: song.album || 'Single',
+          duration: 0,
+          blob: new Blob([], { type: 'audio/mp3' }),
+          file: new Blob([], { type: 'audio/mp3' }),
+          addedAt: Date.now(),
+          createdAt: Date.now(),
+          format: 'audio/mp3',
+          size: 0,
+          coverDataUrl: song.artworkUrl || undefined,
+          isFavorite: false,
+          lyrics: `[00:00.00] Identified Track: ${song.title} by ${song.artist}\n[00:01.00] YouTube Music: ${song.ytMusicUrl}`,
+        };
+        trackId = await db.tracks.add(newTrack as Track);
+      }
+
+      // 2. Add to "Wanted / Identified Tracks" playlist
+      const WISHLIST_NAME = 'Wanted / Identified Tracks';
+      let wishlistPl = playlists.find(p => p.name.toLowerCase() === WISHLIST_NAME.toLowerCase());
+
+      if (wishlistPl) {
+        if (!wishlistPl.trackIds.includes(trackId)) {
+          const updatedIds = [...wishlistPl.trackIds, trackId];
+          await db.playlists.update(wishlistPl.id, { trackIds: updatedIds });
+        }
+      } else {
+        const newPl: Omit<Playlist, 'id'> = {
+          name: WISHLIST_NAME,
+          description: 'Identified tracks saved for offline reference with YouTube Music link',
+          createdAt: Date.now(),
+          trackIds: [trackId],
+          coverColor: '#e11d48',
+        };
+        await db.playlists.add(newPl as Playlist);
+      }
+
+      await loadDatabase();
+      showToast(`Saved "${song.title}" to "${WISHLIST_NAME}"`, 'success');
+    } catch (err) {
+      console.error('Failed to save identified song to wishlist:', err);
+      showToast('Could not save track to wishlist', 'error');
+    }
   };
 
   // --- Keyboard Shortcuts Global Listener ---
@@ -1049,6 +1517,10 @@ export default function App() {
         case 'KeyT':
           e.preventDefault();
           setIsSleepModalOpen(prev => !prev);
+          break;
+        case 'KeyI':
+          e.preventDefault();
+          setIsIdentifyModalOpen(prev => !prev);
           break;
         case 'KeyY':
           e.preventDefault();
@@ -1203,7 +1675,7 @@ export default function App() {
   const favoritesCount = useMemo(() => library.filter(t => t.isFavorite).length, [library]);
 
   return (
-    <div className="flex flex-col lg:flex-row h-[100dvh] w-full overflow-hidden bg-[#0d0d0f] text-zinc-100 select-none relative">
+    <div className="flex flex-col lg:flex-row h-[100dvh] w-full overflow-hidden bg-black text-zinc-100 select-none relative">
       {/* 1. Dynamic Blurred Backdrop: Apple Music ambient album glow */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0 select-none">
         {currentTrack?.coverDataUrl ? (
@@ -1219,7 +1691,7 @@ export default function App() {
           </div>
         )}
         {/* Soft obsidian vignette ensuring maximum contrast and legibility */}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0d0d0f]/50 via-[#0d0d0f]/80 to-[#0d0d0f]/95 pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/75 to-black pointer-events-none" />
       </div>
 
       {/* Toast Notification (macOS notification banner style) */}
@@ -1227,10 +1699,10 @@ export default function App() {
         <div className="fixed top-3 right-3 sm:top-4 sm:right-4 z-50 animate-in slide-in-from-top-2 duration-200">
           <div className={`px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl border shadow-2xl flex items-center gap-2.5 text-xs font-medium backdrop-blur-2xl ${
             toastMessage.type === 'success'
-              ? 'bg-[#1c1c1e]/90 border-emerald-500/30 text-emerald-200'
+              ? 'bg-[#0a0a0a]/95 border-emerald-500/30 text-emerald-200'
               : toastMessage.type === 'error'
-              ? 'bg-[#1c1c1e]/90 border-rose-500/30 text-rose-200'
-              : 'bg-[#1c1c1e]/90 border-white/10 text-white'
+              ? 'bg-[#0a0a0a]/95 border-rose-500/30 text-rose-200'
+              : 'bg-[#0a0a0a]/95 border-white/10 text-white'
           }`}>
             {toastMessage.type === 'success' ? (
               <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
@@ -1246,7 +1718,7 @@ export default function App() {
 
       {/* Global Drag-and-Drop Overlay */}
       {isWindowDragOver && (
-        <div className="fixed inset-0 z-50 bg-[#0d0d0f]/85 backdrop-blur-2xl border-4 border-dashed border-rose-500/60 flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-100">
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-2xl border-4 border-dashed border-rose-500/60 flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-100">
           <UploadCloud size={64} className="text-rose-400 animate-bounce mb-3" />
           <h2 className="text-2xl font-bold text-white tracking-tight">Drop audio files to import</h2>
           <p className="text-sm text-zinc-300 mt-1">Accepts MP3, WAV, AAC, FLAC, M4A, OGG into your IndexedDB library</p>
@@ -1272,11 +1744,20 @@ export default function App() {
         onDropTrackToPlaylist={handleAddTrackToPlaylist}
         analyser={analyserNodeState}
         isPlaying={isPlaying}
-        visualizerMode={visualizerMode}
         onLoadDemoTracks={handleLoadDemoTracks}
         isLoadingDemo={isLoadingDemo}
         isMobileOpen={isMobileMenuOpen}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
+        onOpenIdentifyModal={() => setIsIdentifyModalOpen(true)}
+        onOpenQueue={() => setIsQueueOpen(true)}
+        onOpenSleepTimer={() => setIsSleepModalOpen(true)}
+        queueCount={queue.length}
+        sleepTimer={sleepTimer}
+        currentUser={currentUser}
+        onOpenAccountModal={() => setIsAccountModalOpen(true)}
+        onOpenListenTogether={() => setIsListenTogetherOpen(true)}
+        activeSession={activeSession}
+        onOpenAbout={() => setIsAboutModalOpen(true)}
       />
 
       {/* Main Workspace */}
@@ -1301,106 +1782,221 @@ export default function App() {
           viewSubtitle={currentViewDetails.subtitle}
           isImporting={isImporting}
           importProgress={importProgress}
+          onOpenIdentifyModal={() => setIsIdentifyModalOpen(true)}
           onToggleMobileMenu={() => setIsMobileMenuOpen(true)}
+          currentUser={currentUser}
+          onOpenAccountModal={() => setIsAccountModalOpen(true)}
+          onOpenListenTogether={() => setIsListenTogetherOpen(true)}
+          activeSession={activeSession}
         />
 
         {/* Content Table / Main View */}
-        <main className="flex-1 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 pb-safe">
-          {visibleTracks.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6 sm:p-8 max-w-md mx-auto">
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white/[0.04] border border-white/[0.08] backdrop-blur-xl flex items-center justify-center text-rose-500 mb-3 sm:mb-4 shadow-xl">
-                <Music size={26} />
-              </div>
-              <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                {searchQuery ? 'No matching tracks found' : 'Your library is empty'}
-              </h3>
-              <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                {searchQuery
-                  ? `No songs matched "${searchQuery}". Try a different keyword.`
-                  : 'Import audio files from your device, paste a web audio URL, or generate 3 free synthwave demo tracks.'}
-              </p>
-              {!searchQuery && (
-                <div className="mt-5 flex flex-col sm:flex-row items-center gap-2.5 w-full max-w-xs">
-                  {/* Apple-style pill action buttons with subtle translucency */}
-                  <button
-                    onClick={() => setIsImportModalOpen(true)}
-                    className="w-full py-2.5 px-4 bg-white/10 hover:bg-white/15 active:scale-95 text-white rounded-full text-xs font-semibold border border-white/10 shadow-sm backdrop-blur-md transition-all flex items-center justify-center gap-2"
-                  >
-                    <UploadCloud size={15} />
-                    <span>Import Audio Files</span>
-                  </button>
-
-                  <button
-                    onClick={handleLoadDemoTracks}
-                    disabled={isLoadingDemo}
-                    className="w-full py-2.5 px-4 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] disabled:opacity-50 text-zinc-300 hover:text-white rounded-full text-xs font-medium transition-colors flex items-center justify-center gap-2 backdrop-blur-md"
-                  >
-                    <Sparkles size={14} className="text-rose-400" />
-                    <span>{isLoadingDemo ? 'Synthesizing...' : 'Load 3 Demo Tracks'}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="w-full max-w-full overflow-hidden">
-              {/* Table Column Headers */}
-              <div className="w-full max-w-full flex items-center justify-between px-3 py-2 text-zinc-400/80 text-[10px] sm:text-[11px] uppercase tracking-wider font-semibold border-b border-white/[0.06] mb-1 select-none">
-                <div className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0 pr-2">
-                  <div className="w-6 sm:w-8 text-center shrink-0">#</div>
-                  <div className="w-9 sm:w-10 shrink-0"></div>
-                  <div className="flex-1 min-w-0">Title</div>
-                </div>
-                <div className="hidden md:block w-[150px] shrink-0 px-3 text-left">Album</div>
-                <div className="flex-shrink-0 flex items-center gap-2">
-                  <div className="w-12 sm:w-14 text-right flex items-center justify-end">
-                    <Clock size={13} className="inline mr-1" />
+        <main className="flex-1 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 pb-safe flex flex-col">
+          <div className="flex-1 flex flex-col min-h-full w-full max-w-full">
+            {visibleTracks.length === 0 ? (
+              library.length > 0 ? (
+                /* Empty state due to active filter */
+                <div className="flex-1 py-16 flex flex-col items-center justify-center text-center max-w-sm mx-auto">
+                  <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center text-rose-400 mb-3">
+                    <ListFilter size={22} />
                   </div>
-                  <div className="w-8"></div>
-                  <div className="w-8"></div>
+                  <h4 className="text-sm font-semibold text-white">No tracks match search</h4>
+                  <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                    {searchQuery ? `Search: "${searchQuery}"` : ''}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                    }}
+                    className="mt-4 px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-full text-xs font-semibold border border-white/10 transition-colors cursor-pointer"
+                  >
+                    Clear Search
+                  </button>
+                </div>
+              ) : (
+                /* Completely empty library */
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-6 sm:p-8 max-w-md mx-auto">
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white/[0.04] border border-white/[0.08] backdrop-blur-xl flex items-center justify-center text-rose-500 mb-3 sm:mb-4 shadow-xl">
+                    <Music size={26} />
+                  </div>
+                  <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                    {searchQuery ? 'No matching tracks found' : 'Your library is empty'}
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                    {searchQuery
+                      ? `No songs matched "${searchQuery}". Try a different keyword.`
+                      : 'Import audio files from your device, paste a web audio URL, or generate 3 free synthwave demo tracks.'}
+                  </p>
+                  {!searchQuery && (
+                    <div className="mt-5 flex flex-col sm:flex-row items-center gap-2.5 w-full max-w-xs">
+                      {/* Apple-style pill action buttons with subtle translucency */}
+                      <button
+                        onClick={() => setIsImportModalOpen(true)}
+                        className="w-full py-2.5 px-4 bg-white/10 hover:bg-white/15 active:scale-95 text-white rounded-full text-xs font-semibold border border-white/10 shadow-sm backdrop-blur-md transition-all flex items-center justify-center gap-2"
+                      >
+                        <UploadCloud size={15} />
+                        <span>Import Audio Files</span>
+                      </button>
+
+                      <button
+                        onClick={handleLoadDemoTracks}
+                        disabled={isLoadingDemo}
+                        className="w-full py-2.5 px-4 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] disabled:opacity-50 text-zinc-300 hover:text-white rounded-full text-xs font-medium transition-colors flex items-center justify-center gap-2 backdrop-blur-md"
+                      >
+                        <Sparkles size={14} className="text-rose-400" />
+                        <span>{isLoadingDemo ? 'Synthesizing...' : 'Load 3 Demo Tracks'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            ) : (
+              <div className="w-full max-w-full relative flex-1">
+                {/* Modern Desktop Header (sm and larger screens) */}
+                <div className="hidden sm:grid grid-cols-[40px_1fr_80px_48px] items-center px-4 py-2 border-b border-white/5 text-[11px] font-medium tracking-wider text-zinc-500 uppercase select-none mb-1">
+                  <span className="text-center font-mono opacity-60">#</span>
+                  <span className="pl-3 sm:pl-3.5">Track</span>
+                  <span className="text-right pr-2">Duration</span>
+                  <span className="sr-only">Actions</span>
+                </div>
+
+                {/* Responsive Mobile Sub-header (< sm / < 640px) */}
+                <div className="flex sm:hidden items-center justify-between px-4 py-2 mb-1 border-b border-white/5 select-none relative">
+                  <span className="text-xs font-medium text-zinc-400">
+                    {visibleTracks.length} {visibleTracks.length === 1 ? 'track' : 'tracks'}
+                  </span>
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setMobileSortOpen(prev => !prev)}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-neutral-300 hover:text-white bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 rounded-full transition-colors active:scale-95 cursor-pointer"
+                      title="Sort tracks"
+                    >
+                      <ArrowUpDown size={12} className="text-neutral-400" />
+                      <span>Sort ▾</span>
+                    </button>
+
+                    {mobileSortOpen && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-40 bg-transparent"
+                          onClick={() => setMobileSortOpen(false)}
+                        />
+                        <div className="absolute right-0 top-full mt-1.5 z-50 min-w-[150px] bg-[#0a0a0a] border border-white/10 backdrop-blur-xl rounded-xl shadow-2xl p-1.5 flex flex-col gap-0.5 text-left text-xs animate-in fade-in zoom-in-95 duration-100">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (sortField === 'title') {
+                                setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                              } else {
+                                setSortField('title');
+                                setSortOrder('asc');
+                              }
+                              setMobileSortOpen(false);
+                            }}
+                            className={`w-full px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors cursor-pointer ${
+                              sortField === 'title' ? 'bg-white/10 text-white font-medium' : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                            }`}
+                          >
+                            <span>By Name</span>
+                            {sortField === 'title' && (
+                              <span className="text-[10px] text-zinc-400">{sortOrder === 'asc' ? 'A→Z' : 'Z→A'}</span>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (sortField === 'createdAt') {
+                                setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                              } else {
+                                setSortField('createdAt');
+                                setSortOrder('desc');
+                              }
+                              setMobileSortOpen(false);
+                            }}
+                            className={`w-full px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors cursor-pointer ${
+                              sortField === 'createdAt' ? 'bg-white/10 text-white font-medium' : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                            }`}
+                          >
+                            <span>By Date</span>
+                            {sortField === 'createdAt' && (
+                              <span className="text-[10px] text-zinc-400">{sortOrder === 'desc' ? 'New' : 'Old'}</span>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (sortField === 'duration') {
+                                setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                              } else {
+                                setSortField('duration');
+                                setSortOrder('asc');
+                              }
+                              setMobileSortOpen(false);
+                            }}
+                            className={`w-full px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors cursor-pointer ${
+                              sortField === 'duration' ? 'bg-white/10 text-white font-medium' : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                            }`}
+                          >
+                            <span>By Duration</span>
+                            {sortField === 'duration' && (
+                              <span className="text-[10px] text-zinc-400">{sortOrder === 'asc' ? 'Short' : 'Long'}</span>
+                            )}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Track rows */}
+                <div className="space-y-1 w-full max-w-full">
+                  {visibleTracks.map((track, idx) => {
+                    const isCurrent = currentTrack?.id === track.id;
+                    const isPlaylistView = typeof currentView === 'object';
+                    const playlistId = isPlaylistView ? currentView.playlistId : null;
+
+                    return (
+                      <TrackRow
+                        key={`${track.id}-${idx}`}
+                        track={track}
+                        index={idx}
+                        isCurrent={isCurrent}
+                        isPlaying={isPlaying}
+                        onPlay={playTrack}
+                        onToggleFavorite={handleToggleFavorite}
+                        onPlayNext={handlePlayNext}
+                        onAddToQueue={handleAddToQueue}
+                        onInspect={setInspectingTrack}
+                        onDelete={handleDeleteTrack}
+                        playlists={playlists}
+                        onAddToPlaylist={handleAddTrackToPlaylist}
+                        currentPlaylistId={playlistId}
+                        onRemoveFromPlaylist={handleRemoveTrackFromPlaylist}
+                        isReorderable={isPlaylistView && !searchQuery.trim()}
+                        onMoveUp={() => playlistId && handleMovePlaylistItem(playlistId, idx, idx - 1)}
+                        onMoveDown={() => playlistId && handleMovePlaylistItem(playlistId, idx, idx + 1)}
+                        isFirst={idx === 0}
+                        isLast={idx === visibleTracks.length - 1}
+                        activeMenuTrackId={activeMenuTrackId}
+                        setActiveMenuTrackId={setActiveMenuTrackId}
+                        onEditClassification={handleOpenEditClassification}
+                      />
+                    );
+                  })}
                 </div>
               </div>
+            )}
 
-              {/* Track rows */}
-              <div className="space-y-1 w-full max-w-full">
-                {visibleTracks.map((track, idx) => {
-                  const isCurrent = currentTrack?.id === track.id;
-                  const isPlaylistView = typeof currentView === 'object';
-                  const playlistId = isPlaylistView ? currentView.playlistId : null;
-
-                  return (
-                    <TrackRow
-                      key={`${track.id}-${idx}`}
-                      track={track}
-                      index={idx}
-                      isCurrent={isCurrent}
-                      isPlaying={isPlaying}
-                      onPlay={playTrack}
-                      onToggleFavorite={handleToggleFavorite}
-                      onAddToQueue={handleAddToQueue}
-                      onInspect={setInspectingTrack}
-                      onDelete={handleDeleteTrack}
-                      playlists={playlists}
-                      onAddToPlaylist={handleAddTrackToPlaylist}
-                      currentPlaylistId={playlistId}
-                      onRemoveFromPlaylist={handleRemoveTrackFromPlaylist}
-                      isReorderable={isPlaylistView && !searchQuery.trim()}
-                      onMoveUp={() => playlistId && handleMovePlaylistItem(playlistId, idx, idx - 1)}
-                      onMoveDown={() => playlistId && handleMovePlaylistItem(playlistId, idx, idx + 1)}
-                      isFirst={idx === 0}
-                      isLast={idx === visibleTracks.length - 1}
-                    />
-                  );
-                })}
-              </div>
-
-              {/* Simple Footer Badge */}
-              <div className="flex justify-center items-center py-6 pb-32 text-center select-none">
-                <span className="text-xs text-zinc-500 tracking-wide font-medium">
-                  Made by Aman
-                </span>
-              </div>
+            {/* Simple Footer Badge */}
+            <div className="mt-auto pt-6 pb-3 sm:pb-4 flex justify-center items-center text-center select-none shrink-0">
+              <span className="text-xs text-zinc-500 tracking-wide font-medium">
+                Made by Aman
+              </span>
             </div>
-          )}
+          </div>
         </main>
 
         {/* Player Bottom Bar */}
@@ -1440,6 +2036,7 @@ export default function App() {
           onOpenPlaylistsDrawer={() => setIsMobileMenuOpen(true)}
           onOpenSleepTimer={() => setIsSleepModalOpen(true)}
           onOpenQueue={() => setIsQueueOpen(true)}
+          onOpenIdentifyModal={() => setIsIdentifyModalOpen(true)}
           sleepTimer={sleepTimer}
           queueCount={queue.length}
         />
@@ -1527,8 +2124,6 @@ export default function App() {
         isShuffle={isShuffle}
         onToggleShuffle={() => setIsShuffle(prev => !prev)}
         analyser={analyserNodeState}
-        visualizerMode={visualizerMode}
-        onChangeVisualizerMode={setVisualizerMode}
         sleepTimer={sleepTimer}
         onOpenLyrics={() => setIsLyricsModalOpen(true)}
       />
@@ -1561,6 +2156,69 @@ export default function App() {
         onConfirm={confirmDialog.onConfirm}
         title={confirmDialog.title}
         message={confirmDialog.message}
+      />
+
+      {/* Two-step Classification Wizard Modal (Import & Edit) */}
+      <ClassificationWizardModal
+        isOpen={isClassificationWizardOpen}
+        onClose={() => {
+          setIsClassificationWizardOpen(false);
+          setEditingClassificationTrack(null);
+          setPendingImportTracks([]);
+        }}
+        pendingTracks={pendingImportTracks}
+        onConfirmImport={handleConfirmImportClassification}
+        editingTrack={editingClassificationTrack}
+        onConfirmEdit={handleConfirmEditClassification}
+      />
+
+      {/* Background Song Recognition Modal (YouTube Music Deep Link & Wishlist) */}
+      <SongRecognitionModal
+        isOpen={isIdentifyModalOpen}
+        onClose={() => setIsIdentifyModalOpen(false)}
+        onSaveToWishlist={handleSaveIdentifiedTrackToWishlist}
+      />
+
+      {/* Firebase Cloud Account Modal */}
+      <AccountModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        currentUser={currentUser}
+        onSyncLocalWithCloud={() => syncLocalMetadataWithCloud(currentUser)}
+        favoritesCount={favoritesCount}
+        playlistsCount={playlists.length}
+      />
+
+      {/* Real-Time Listen Together Session Modal */}
+      <ListenTogetherModal
+        isOpen={isListenTogetherOpen}
+        onClose={() => setIsListenTogetherOpen(false)}
+        currentUser={currentUser}
+        currentTrack={currentTrack}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
+        activeSession={activeSession}
+        isHost={isHost}
+        syncWithHostEnabled={syncWithHostEnabled}
+        onSetSyncWithHostEnabled={setSyncWithHostEnabled}
+        onStartHosting={handleStartHosting}
+        onJoinSession={handleJoinSession}
+        onLeaveSession={handleLeaveSession}
+        onRequireAuth={() => {
+          setIsListenTogetherOpen(false);
+          setIsAccountModalOpen(true);
+        }}
+        matchedLocalTrackTitle={
+          activeSession?.trackTitle
+            ? library.find(t => t.title.toLowerCase() === activeSession.trackTitle?.toLowerCase())?.title
+            : undefined
+        }
+      />
+
+      {/* About Cadence Music Dialog */}
+      <AboutModal
+        isOpen={isAboutModalOpen}
+        onClose={() => setIsAboutModalOpen(false)}
       />
     </div>
   );

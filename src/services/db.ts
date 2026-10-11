@@ -11,6 +11,10 @@ export class CadenceDB extends Dexie {
       tracks: '++id, title, artist, album, duration, addedAt, createdAt, isFavorite',
       playlists: '++id, name, createdAt'
     });
+    this.version(2).stores({
+      tracks: '++id, title, artist, album, duration, addedAt, createdAt, isFavorite, category, genre',
+      playlists: '++id, name, createdAt'
+    });
   }
 }
 
