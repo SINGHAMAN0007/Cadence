@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { X, Music, Sparkles, ExternalLink, ShieldCheck, Heart } from 'lucide-react';
+import { AppLogo } from './AppLogo';
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -55,8 +56,8 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
 
         {/* Modal Header */}
         <div className="flex items-center gap-3.5 mb-4 relative">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center text-white shadow-lg shadow-rose-500/25 shrink-0 ring-1 ring-white/20">
-            <Music size={22} className="stroke-[2.5]" />
+          <div className="w-12 h-12 rounded-full overflow-hidden shrink-0 shadow-lg shadow-red-500/20 ring-1 ring-white/10">
+            <AppLogo className="w-full h-full" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">

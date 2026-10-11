@@ -3,8 +3,6 @@ import path from 'path';
 import zlib from 'zlib';
 
 function createPng(width, height, getPixel) {
-  // width, height: number
-  // getPixel: (x, y) => [r, g, b, a]
   const rawData = Buffer.alloc(height * (width * 4 + 1));
   let offset = 0;
   for (let y = 0; y < height; y++) {
@@ -66,77 +64,120 @@ if (!fs.existsSync(outDir)) {
   fs.mkdirSync(outDir, { recursive: true });
 }
 
+// Point-in-triangle test with barycentric coordinates
+function pointInTriangle(px, py, x1, y1, x2, y2, x3, y3) {
+  const d1 = (px - x2) * (y1 - y2) - (x1 - x2) * (py - y2);
+  const d2 = (px - x3) * (y2 - y3) - (x2 - x3) * (py - y3);
+  const d3 = (px - x1) * (y3 - y1) - (x3 - x1) * (py - y1);
+
+  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+  return !(hasNeg && hasPos);
+}
+
 function renderIcon(size, isMaskable = false) {
+  const cx = size / 2;
+  const cy = size / 2;
+
+  // YT Music Logo proportions:
+  // Outer circle radius
+  const rMax = isMaskable ? size * 0.40 : size * 0.45;
+  // Outer ring inner boundary (thickness ~ 11% of outer radius)
+  const rRingInner = rMax * (9.273 / 12.0);
+  // Inner red disc radius (approx 59% of outer radius)
+  const rDisc = rMax * (7.091 / 12.0);
+
+  // Play triangle vertices inside inner disc
+  // In standard YT Music logo, triangle is optically centered:
+  const tX1 = cx - rDisc * 0.31;
+  const tY1 = cy - rDisc * 0.54;
+  const tX2 = cx + rDisc * 0.49;
+  const tY2 = cy;
+  const tX3 = cx - rDisc * 0.31;
+  const tY3 = cy + rDisc * 0.54;
+
   return createPng(size, size, (x, y) => {
-    const cx = size / 2;
-    const cy = size / 2;
-    const dx = x - cx;
-    const dy = y - cy;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    // 2x2 supersampling for smooth antialiasing
+    let totalR = 0;
+    let totalG = 0;
+    let totalB = 0;
+    let totalA = 0;
 
-    // Deep modern dark background with purple radial gradient
-    const t = Math.min(1, dist / (size * 0.7));
-    const bgR = Math.round(15 + (1 - t) * 45);
-    const bgG = Math.round(15 + (1 - t) * 15);
-    const bgB = Math.round(25 + (1 - t) * 90);
+    const samples = [
+      [0.25, 0.25],
+      [0.75, 0.25],
+      [0.25, 0.75],
+      [0.75, 0.75]
+    ];
 
-    // Central circular badge
-    const badgeRadius = isMaskable ? size * 0.38 : size * 0.42;
-    if (dist <= badgeRadius) {
-      // Glow boundary
-      const innerT = dist / badgeRadius;
-      const r = Math.round(139 + innerT * 40);
-      const g = Math.round(92 - innerT * 30);
-      const b = Math.round(246 - innerT * 20);
+    for (const [ox, oy] of samples) {
+      const px = x + ox;
+      const py = y + oy;
+      const dx = px - cx;
+      const dy = py - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
 
-      // Simple music wave bars or headphone in center
-      const iconScale = size / 512;
-      const relX = (x - cx) / iconScale;
-      const relY = (y - cy) / iconScale;
-
-      // Draw music bars in the center
-      const barWidth = 18;
-      const bars = [
-        { x: -50, h: 50 },
-        { x: -25, h: 90 },
-        { x: 0, h: 130 },
-        { x: 25, h: 80 },
-        { x: 50, h: 45 }
-      ];
-
-      for (const bar of bars) {
-        if (Math.abs(relX - bar.x) <= barWidth / 2 && Math.abs(relY) <= bar.h / 2) {
-          return [255, 255, 255, 255];
+      if (dist <= rMax && dist >= rRingInner) {
+        // Red outer ring
+        totalR += 255;
+        totalG += 0;
+        totalB += 0;
+        totalA += 255;
+      } else if (dist < rRingInner && dist > rDisc) {
+        // Black gap
+        totalR += 0;
+        totalG += 0;
+        totalB += 0;
+        totalA += 255;
+      } else if (dist <= rDisc) {
+        // Inner disc
+        if (pointInTriangle(px, py, tX1, tY1, tX2, tY2, tX3, tY3)) {
+          // White play button
+          totalR += 255;
+          totalG += 255;
+          totalB += 255;
+          totalA += 255;
+        } else {
+          // Red disc background
+          totalR += 255;
+          totalG += 0;
+          totalB += 0;
+          totalA += 255;
         }
+      } else {
+        // Outer OLED True Black background
+        totalR += 0;
+        totalG += 0;
+        totalB += 0;
+        totalA += 255;
       }
-
-      return [r, g, b, 255];
     }
 
-    return [bgR, bgG, bgB, 255];
+    return [
+      Math.round(totalR / 4),
+      Math.round(totalG / 4),
+      Math.round(totalB / 4),
+      Math.round(totalA / 4)
+    ];
   });
 }
 
+console.log('Generating PNG icons...');
 fs.writeFileSync(path.join(outDir, 'pwa-192x192.png'), renderIcon(192));
 fs.writeFileSync(path.join(outDir, 'pwa-512x512.png'), renderIcon(512));
 fs.writeFileSync(path.join(outDir, 'pwa-maskable-512x512.png'), renderIcon(512, true));
 fs.writeFileSync(path.join(outDir, 'apple-touch-icon.png'), renderIcon(180));
 
 const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="108" fill="#09090b"/>
-  <circle cx="256" cy="256" r="180" fill="url(#grad)"/>
-  <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#4f46e5"/>
-    </linearGradient>
-  </defs>
-  <rect x="176" y="216" width="20" height="80" rx="10" fill="#ffffff"/>
-  <rect x="216" y="176" width="20" height="160" rx="10" fill="#ffffff"/>
-  <rect x="256" y="136" width="20" height="240" rx="10" fill="#ffffff"/>
-  <rect x="296" y="186" width="20" height="140" rx="10" fill="#ffffff"/>
-  <rect x="336" y="226" width="20" height="60" rx="10" fill="#ffffff"/>
+  <rect width="512" height="512" rx="112" fill="#000000"/>
+  <!-- Outer red ring -->
+  <path d="M256 36 C134.5 36 36 134.5 36 256 C36 377.5 134.5 476 256 476 C377.5 476 476 377.5 476 256 C476 134.5 377.5 36 256 36 Z M256 86 C349.9 86 426 162.1 426 256 C426 349.9 349.9 426 256 426 C162.1 426 86 349.9 86 256 C86 162.1 162.1 86 256 86 Z" fill="#FF0000"/>
+  <!-- Inner red disc -->
+  <circle cx="256" cy="256" r="130" fill="#FF0000"/>
+  <!-- Center white play triangle -->
+  <path d="M216 186 C216 180.5 222 177 227 180 L320 250 C324.5 253 324.5 259 320 262 L227 332 C222 335 216 331.5 216 326 Z" fill="#FFFFFF"/>
 </svg>`;
 fs.writeFileSync(path.join(outDir, 'icon.svg'), svgContent);
 
-console.log('Successfully generated PWA icon assets in public/');
+console.log('Successfully generated YT Music-styled Cadence app icons in public/');

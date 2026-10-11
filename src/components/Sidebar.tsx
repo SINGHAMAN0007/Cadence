@@ -8,6 +8,7 @@ import type { Playlist, SleepTimerState } from '../types';
 import type { PlaybackSessionData } from '../services/firebase';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { AudioVisualizer } from './AudioVisualizer';
+import { AppLogo } from './AppLogo';
 
 interface SidebarProps {
   currentView: 'library' | 'favorites' | 'recent' | { playlistId: number };
@@ -106,8 +107,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 pb-2 pt-4 sm:pt-5 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-rose-500 via-pink-500 to-rose-600 flex items-center justify-center text-white shadow-md shadow-rose-500/20">
-              <Music size={17} />
+            <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 shadow-md shadow-red-500/20 border border-neutral-800">
+              <AppLogo className="w-full h-full" />
             </div>
             <div>
               <h1 className="text-sm font-semibold text-white tracking-tight flex items-center gap-1.5">
