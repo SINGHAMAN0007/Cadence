@@ -1,8 +1,8 @@
 {
   "id": "/",
   "name": "Cadence Music",
-  "short_name": "Cadence Music",
-  "description": "Offline music player with IndexedDB storage, real-time visualizer, and background audio support.",
+  "short_name": "Cadence",
+  "description": "Offline music player, real-time visualizer, and background audio support.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
