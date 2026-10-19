@@ -28,10 +28,10 @@ import {
   type Unsubscribe
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { app, auth } from '../firebase';
 
-const app = initializeApp(firebaseConfig);
 export const firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+export { auth };
 
 // Enable persistent session storage across offline/airplane mode
 try {

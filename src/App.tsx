@@ -31,7 +31,7 @@ import { LyricsModal } from './components/LyricsModal';
 import { ClassificationWizardModal, type PendingImportItem } from './components/ClassificationWizardModal';
 import { SongRecognitionModal } from './components/SongRecognitionModal';
 import { CategoryFilterBar } from './components/CategoryFilterBar';
-import { AccountModal } from './components/AccountModal';
+import { CloudAccountModal } from './components/CloudAccountModal';
 import { ListenTogetherModal } from './components/ListenTogetherModal';
 import { AboutModal } from './components/AboutModal';
 import { classifyTrackWithHeuristics } from './services/classifierService';
@@ -2570,7 +2570,7 @@ export default function App() {
       />
 
       {/* Firebase Cloud Account Modal */}
-      <AccountModal
+      <CloudAccountModal
         isOpen={isAccountModalOpen}
         onClose={() => setIsAccountModalOpen(false)}
         currentUser={currentUser}
