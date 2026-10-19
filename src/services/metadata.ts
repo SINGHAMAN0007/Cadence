@@ -58,19 +58,11 @@ function getAudioDurationViaAudioElement(file: File | Blob): Promise<number> {
   });
 }
 
+import { sanitizeMetadata } from '../utils/sanitizeMetadata';
+
 export function cleanSongTitle(rawTitleOrFilename: string): string {
   if (!rawTitleOrFilename) return 'Untitled Track';
-
-  let cleaned = rawTitleOrFilename
-    // 1. Remove file extensions (.mp3, .wav, .flac, .aac, .m4a, etc.)
-    .replace(/\.[^/.]+$/, '')
-    // 2. Strip common website promotion tags and brackets like [www...], (KoshalWorld.Com), (Official Audio), etc.
-    .replace(/[\(\[][^\)\]]*(?:com|net|org|audio|video|lyrics)[^\)\]]*[\)\]]/gi, '')
-    // 3. Remove stray double spaces or trailing punctuation
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return cleaned || 'Untitled Track';
+  return sanitizeMetadata(rawTitleOrFilename).title;
 }
 
 export interface ExtractedMetadata {
@@ -149,13 +141,16 @@ export async function parseAudioMetadata(file: File | Blob, rawName?: string): P
         lyrics = metadata.common.lyrics.join('\n\n').trim();
       }
 
-      const rawParsedTitle = metadata.common.title?.trim();
-      const sanitizedTitle = rawParsedTitle ? cleanSongTitle(rawParsedTitle) : fallbackTitle;
+      const rawParsedTitle = metadata.common.title?.trim() || fileName;
+      const rawParsedArtist = metadata.common.artist?.trim() || '';
+      const rawParsedAlbum = metadata.common.album?.trim() || '';
+
+      const cleaned = sanitizeMetadata(rawParsedTitle, rawParsedArtist, rawParsedAlbum);
 
       return {
-        title: sanitizedTitle,
-        artist: metadata.common.artist?.trim() || 'Unknown Artist',
-        album: metadata.common.album?.trim() || 'Local Audio',
+        title: cleaned.title,
+        artist: cleaned.artist,
+        album: cleaned.album,
         duration: Math.round(duration),
         format: file.type || metadata.format.container || 'audio/mpeg',
         coverDataUrl,
@@ -170,11 +165,12 @@ export async function parseAudioMetadata(file: File | Blob, rawName?: string): P
 
   // Fallback: fast HTML5 Audio duration detection
   const duration = await getAudioDurationViaAudioElement(file);
+  const fallbackClean = sanitizeMetadata(fileName);
 
   return {
-    title: fallbackTitle,
-    artist: 'Unknown Artist',
-    album: 'Local Audio',
+    title: fallbackClean.title,
+    artist: fallbackClean.artist,
+    album: fallbackClean.album,
     duration: Math.round(duration),
     format: file.type || 'audio/mpeg',
     coverDataUrl: undefined,

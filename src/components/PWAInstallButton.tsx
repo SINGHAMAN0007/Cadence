@@ -16,10 +16,10 @@ export const PWAInstallButton: React.FC = () => {
     return (
       <button
         onClick={install}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-500 active:scale-95 text-white text-xs font-semibold shadow-md shadow-violet-600/20 transition-all shrink-0 min-h-[36px]"
+        className="flex items-center gap-1.5 px-3 h-[32px] min-h-[32px] rounded-full bg-neutral-900/80 hover:bg-neutral-800 active:scale-95 text-neutral-200 hover:text-white text-xs font-medium border border-neutral-800 shadow-sm backdrop-blur-md transition-all shrink-0 cursor-pointer"
         title="Install Android App"
       >
-        <Smartphone size={14} />
+        <Smartphone size={13} className="text-neutral-400" />
         <span>Install App</span>
       </button>
     );
@@ -38,7 +38,7 @@ export const PWAInstallButton: React.FC = () => {
         </button>
 
         {showIOSGuide && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-in fade-in">
             <div className="w-full max-w-sm rounded-2xl bg-[#0a0a0a] border border-white/10 p-5 shadow-2xl text-zinc-100">
               <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
                 <h3 className="text-sm font-semibold text-white">Install on Mobile</h3>

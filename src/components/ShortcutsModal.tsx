@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Keyboard } from 'lucide-react';
+import { ModalBackdrop } from './ModalBackdrop';
 
 interface ShortcutsModalProps {
   isOpen: boolean;
@@ -20,18 +21,18 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
     { key: 'F', desc: 'Toggle fullscreen immersive visualizer' },
     { key: 'Y', desc: 'Open synchronized lyrics (ID3 USLT)' },
     { key: 'Q', desc: 'Toggle Up Next queue drawer' },
-    { key: 'I', desc: 'Identify song playing nearby (YouTube Music)' },
+    { key: 'I', desc: 'Identify song playing nearby (YT Music & Spotify)' },
     { key: 'T', desc: 'Open sleep & play timer' },
     { key: 'Esc', desc: 'Close open dialogs and drawers' },
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150">
-      <div 
-        className="w-full max-w-md bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-6 text-zinc-100"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between pb-4 border-b border-white/10">
+    <ModalBackdrop
+      isOpen={isOpen}
+      onClose={onClose}
+      className="max-w-md bg-[#0a0a0a] p-6 text-zinc-100"
+    >
+      <div className="flex items-center justify-between pb-4 border-b border-white/10">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-rose-500">
               <Keyboard size={18} />
@@ -68,7 +69,6 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
             Done
           </button>
         </div>
-      </div>
-    </div>
+    </ModalBackdrop>
   );
 };

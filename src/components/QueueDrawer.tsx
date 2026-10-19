@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Music, Trash2, ArrowUp, ArrowDown, Play, Disc3, Clock } from 'lucide-react';
 import type { Track } from '../types';
+import { sanitizeMetadata } from '../utils/sanitizeMetadata';
 
 interface QueueDrawerProps {
   isOpen: boolean;
@@ -29,6 +30,15 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
 }) => {
   const [activeTab, setActiveTab] = React.useState<'upnext' | 'history'>('upnext');
 
+  React.useEffect(() => {
+    if (isOpen) {
+      document.body.classList.add('overflow-hidden');
+      return () => {
+        document.body.classList.remove('overflow-hidden');
+      };
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const formatDuration = (sec: number) => {
@@ -38,8 +48,16 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-full sm:w-96 bg-[#0a0a0a] backdrop-blur-2xl border-l border-neutral-900 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
-      {/* Header */}
+    <div className="fixed inset-0 z-50 overflow-hidden">
+      {/* Dark frosted backdrop overlay */}
+      <div
+        className="fixed inset-0 bg-black/85 backdrop-blur-xl z-40 transition-opacity duration-300"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* Solid black drawer */}
+      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-96 bg-black border-l border-white/5 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
+        {/* Header */}
       <div className="p-4 border-b border-white/[0.08] flex items-center justify-between">
         <div className="flex items-center gap-1 p-1 bg-white/[0.06] rounded-full">
           <button
@@ -104,12 +122,19 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-zinc-100 truncate">
-                {currentTrack.title}
-              </div>
-              <div className="text-xs text-zinc-400 truncate">
-                {currentTrack.artist}
-              </div>
+              {(() => {
+                const clean = sanitizeMetadata(currentTrack.title, currentTrack.artist, currentTrack.album);
+                return (
+                  <>
+                    <div className="text-sm font-medium text-zinc-100 truncate" title={clean.title}>
+                      {clean.title}
+                    </div>
+                    <div className="text-xs text-zinc-400 truncate" title={clean.artist}>
+                      {clean.artist}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             <span className="text-xs text-zinc-500 font-mono tabular-nums">
               {formatDuration(currentTrack.duration)}
@@ -154,12 +179,19 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                     onPlayTrack(track, remainingQueue);
                   }}
                 >
-                  <div className="text-xs font-medium text-zinc-200 truncate group-hover:text-violet-400 transition-colors">
-                    {track.title}
-                  </div>
-                  <div className="text-[11px] text-zinc-400 truncate">
-                    {track.artist}
-                  </div>
+                  {(() => {
+                    const clean = sanitizeMetadata(track.title, track.artist, track.album);
+                    return (
+                      <>
+                        <div className="text-xs font-medium text-zinc-200 truncate group-hover:text-violet-400 transition-colors" title={clean.title}>
+                          {clean.title}
+                        </div>
+                        <div className="text-[11px] text-zinc-400 truncate" title={clean.artist}>
+                          {clean.artist}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <span className="text-[11px] text-zinc-500 font-mono tabular-nums shrink-0">
@@ -217,12 +249,19 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium text-zinc-200 truncate group-hover:text-violet-400 transition-colors">
-                    {track.title}
-                  </div>
-                  <div className="text-[11px] text-zinc-400 truncate">
-                    {track.artist}
-                  </div>
+                  {(() => {
+                    const clean = sanitizeMetadata(track.title, track.artist, track.album);
+                    return (
+                      <>
+                        <div className="text-xs font-medium text-zinc-200 truncate group-hover:text-violet-400 transition-colors" title={clean.title}>
+                          {clean.title}
+                        </div>
+                        <div className="text-[11px] text-zinc-400 truncate" title={clean.artist}>
+                          {clean.artist}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 <button
                   className="opacity-0 group-hover:opacity-100 p-1.5 text-zinc-300 hover:text-violet-400"
@@ -234,6 +273,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
             ))
           )
         )}
+      </div>
       </div>
     </div>
   );

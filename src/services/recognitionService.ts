@@ -6,6 +6,7 @@ export interface IdentifiedSongResult {
   artwork_url?: string | null;
   youtube_url?: string | null;
   youtube_video_id?: string | null;
+  spotify_url?: string | null;
 }
 
 export interface SongRecognitionResponse {
@@ -44,6 +45,24 @@ export function buildYouTubeMusicUrl(
   }
 
   return `https://music.youtube.com/search?q=${encodeURIComponent(title + ' ' + artist)}`;
+}
+
+/**
+ * Builds the Spotify search or direct track link:
+ * - If direct link is provided by API, uses that.
+ * - Otherwise constructs deep search URL: https://open.spotify.com/search/...
+ */
+export function buildSpotifyUrl(
+  title: string,
+  artist: string,
+  directUrl?: string | null
+): string {
+  if (directUrl) {
+    if (directUrl.includes('open.spotify.com') || directUrl.startsWith('spotify:')) {
+      return directUrl;
+    }
+  }
+  return `https://open.spotify.com/search/${encodeURIComponent(title + ' ' + artist)}`;
 }
 
 /**
@@ -226,6 +245,17 @@ export async function identifyAudioTrack(
           if (ytMedia?.url) ytUrl = ytMedia.url;
         }
 
+        let spotifyUrl: string | null = null;
+        if (r.spotify?.external_urls?.spotify) {
+          spotifyUrl = r.spotify.external_urls.spotify;
+        } else if (r.spotify?.link) {
+          spotifyUrl = r.spotify.link;
+        } else if (r.spotify?.id) {
+          spotifyUrl = `https://open.spotify.com/track/${r.spotify.id}`;
+        } else {
+          spotifyUrl = buildSpotifyUrl(r.title, r.artist);
+        }
+
         return {
           status: 'success',
           result: {
@@ -235,6 +265,7 @@ export async function identifyAudioTrack(
             release_date: r.release_date,
             artwork_url: r.spotify?.album?.images?.[0]?.url || r.apple_music?.artwork?.url || null,
             youtube_url: ytUrl,
+            spotify_url: spotifyUrl,
           },
         };
       }

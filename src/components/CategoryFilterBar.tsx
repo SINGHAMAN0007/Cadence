@@ -83,7 +83,6 @@ export const CategoryFilterBar: React.FC<CategoryFilterBarProps> = ({
                   : 'bg-neutral-900/80 text-neutral-300 border-neutral-800 hover:bg-neutral-800'
               }`}
             >
-              <span>{cat.icon}</span>
               <span>{cat.label}</span>
               {count > 0 && (
                 <span className={`text-[10px] tabular-nums px-1.5 py-0.2 rounded-full font-mono ${

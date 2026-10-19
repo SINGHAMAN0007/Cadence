@@ -1,6 +1,8 @@
 import React from 'react';
 import { X, Music, Info, FileAudio, Disc, Calendar, HardDrive, Radio } from 'lucide-react';
 import type { Track } from '../types';
+import { sanitizeMetadata } from '../utils/sanitizeMetadata';
+import { ModalBackdrop } from './ModalBackdrop';
 
 interface TrackDetailsModalProps {
   isOpen: boolean;
@@ -40,12 +42,12 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150">
-      <div 
-        className="w-full max-w-md bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-6 text-zinc-100"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between pb-4 border-b border-white/10">
+    <ModalBackdrop
+      isOpen={isOpen}
+      onClose={onClose}
+      className="max-w-md bg-[#0a0a0a] p-6 text-zinc-100"
+    >
+      <div className="flex items-center justify-between pb-4 border-b border-white/10">
           <div className="flex items-center gap-2.5 text-sm font-semibold text-white tracking-tight">
             <Info size={18} className="text-rose-500" />
             <span>Track Metadata & Properties</span>
@@ -67,9 +69,16 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-base font-bold text-white tracking-tight truncate">{track.title}</h3>
-            <p className="text-sm text-rose-400 truncate">{track.artist}</p>
-            <p className="text-xs text-zinc-400 truncate mt-0.5">{track.album}</p>
+            {(() => {
+              const clean = sanitizeMetadata(track.title, track.artist, track.album);
+              return (
+                <>
+                  <h3 className="text-base font-bold text-white tracking-tight truncate">{clean.title}</h3>
+                  <p className="text-sm text-zinc-300 truncate mt-0.5">{clean.artist}</p>
+                  <p className="text-xs text-zinc-400 truncate mt-0.5">{clean.album}</p>
+                </>
+              );
+            })()}
           </div>
         </div>
 
@@ -133,7 +142,6 @@ export const TrackDetailsModal: React.FC<TrackDetailsModalProps> = ({
             Close
           </button>
         </div>
-      </div>
-    </div>
+    </ModalBackdrop>
   );
 };

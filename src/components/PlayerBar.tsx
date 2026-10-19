@@ -1,14 +1,17 @@
 import React from 'react';
 import { 
-  Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, 
+  Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, 
   Repeat, Shuffle, Timer, Maximize2, Music, Quote
 } from 'lucide-react';
 import { AudioSeeker } from './AudioSeeker';
+import { FavoriteHeartButton } from './FavoriteHeartButton';
+import { sanitizeMetadata } from '../utils/sanitizeMetadata';
 import type { Track, RepeatMode, SleepTimerState } from '../types';
 
 interface PlayerBarProps {
   currentTrack: Track | null;
   isPlaying: boolean;
+  isFavorite?: boolean;
   onTogglePlay: () => void;
   onPrev: () => void;
   onNext: () => void;
@@ -23,7 +26,7 @@ interface PlayerBarProps {
   onCycleRepeat: () => void;
   isShuffle: boolean;
   onToggleShuffle: () => void;
-  onToggleFavorite: (track: Track) => void;
+  onToggleFavorite?: (track: Track) => void;
   playbackRate: number;
   onChangePlaybackRate: (rate: number) => void;
   isQueueOpen: boolean;
@@ -38,6 +41,7 @@ interface PlayerBarProps {
 export const PlayerBar: React.FC<PlayerBarProps> = ({
   currentTrack,
   isPlaying,
+  isFavorite,
   onTogglePlay,
   onPrev,
   onNext,
@@ -65,32 +69,35 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
 }) => {
   const rates = [0.75, 1.0, 1.25, 1.5, 2.0];
   const nextRate = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
+  const effectiveVolume = isMuted ? 0 : volume;
+  const loudnessPercent = Math.round(effectiveVolume * 100);
 
   return (
     <footer className="sticky bottom-0 sm:bottom-4 left-0 right-0 z-40 w-full sm:px-6 px-0 select-none shrink-0 pointer-events-none pb-[env(safe-area-inset-bottom,16px)] sm:pb-0">
-      <div className="pointer-events-auto mx-auto max-w-7xl bg-[#0a0a0a]/95 backdrop-blur-xl border-t sm:border border-white/10 sm:rounded-2xl shadow-2xl shadow-black/90 px-3.5 sm:px-6 py-2 sm:py-3 h-[74px] sm:h-[84px] flex sm:grid sm:grid-cols-[1fr_2fr_1fr] items-center justify-between sm:justify-items-stretch gap-3 sm:gap-6 relative">
-        {/* Mobile Top Scrubber Bar (Interactive touch scrubbing & tap-to-seek) */}
-        <div className="sm:hidden absolute -top-1.5 left-0 right-0 z-20 px-0">
+      <div className="pointer-events-auto w-full max-w-7xl mx-auto h-14 sm:h-auto px-3 sm:px-4 py-0 sm:py-3 bg-[#0a0a0a]/95 backdrop-blur-md border-t sm:border border-white/10 sm:rounded-2xl shadow-2xl flex items-center justify-between gap-3 sm:gap-4 overflow-visible relative">
+        {/* Mobile Top Scrubber Bar (Flush 2px line with no white dot knob) */}
+        <div className="sm:hidden absolute top-0 left-0 right-0 z-20 h-[2px] overflow-hidden pointer-events-auto">
           <AudioSeeker
             currentTime={currentTime}
             duration={duration}
             onSeek={onSeek}
             layout="minimal"
             accentColor="rose"
+            className="w-full h-[2px]"
           />
         </div>
 
-        {/* 1. Track Info (Left - Column 1) */}
-        <div className="flex items-center gap-3 sm:gap-3.5 flex-1 sm:flex-initial sm:min-w-[180px] sm:max-w-[280px] sm:justify-self-start min-w-0 pb-[15px]">
+        {/* Left Track Block */}
+        <div className="flex items-center gap-2.5 sm:gap-3 flex-1 sm:flex-initial sm:w-1/4 min-w-0 sm:min-w-[180px] sm:max-w-[260px] shrink-0">
           {currentTrack ? (
             <>
               <div 
                 onClick={onOpenFullscreen}
-                className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl ring-1 ring-white/10 bg-white/[0.04] overflow-hidden relative group cursor-pointer shrink-0 shadow-md flex items-center justify-center touch-manipulation"
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl ring-1 ring-white/10 bg-white/5 overflow-hidden relative group cursor-pointer flex items-center justify-center shrink-0 shadow-md touch-manipulation"
                 title="Expand Fullscreen (F)"
               >
                 {currentTrack.coverDataUrl ? (
-                  <img src={currentTrack.coverDataUrl} alt={currentTrack.title} className="w-full h-full object-cover" />
+                  <img src={currentTrack.coverDataUrl} alt={currentTrack.title} className="w-full h-full object-cover shrink-0" />
                 ) : (
                   <Music size={18} className="text-zinc-400" />
                 )}
@@ -99,64 +106,87 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                 </div>
               </div>
 
-              <div className="flex flex-col justify-center min-w-0 pr-1 flex-1">
-                <div 
-                  onClick={onOpenFullscreen}
-                  className="text-xs sm:text-[13px] font-semibold text-white tracking-tight truncate hover:text-rose-400 cursor-pointer transition-colors"
-                >
-                  {currentTrack.title}
+              {(() => {
+                const cleanMeta = sanitizeMetadata(currentTrack.title, currentTrack.artist, currentTrack.album);
+                return (
+                  <div className="min-w-0 flex-1 flex flex-col justify-center">
+                    <div 
+                      onClick={onOpenFullscreen}
+                      className="text-xs sm:text-sm font-semibold text-white truncate block w-full hover:text-zinc-300 cursor-pointer transition-colors leading-tight"
+                      title={cleanMeta.title}
+                    >
+                      {cleanMeta.title}
+                    </div>
+                    <div 
+                      className="text-[11px] text-zinc-400 truncate block w-full mt-0.5 leading-tight"
+                      title={cleanMeta.artist}
+                    >
+                      {cleanMeta.artist}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Now Playing Favorite Heart Button */}
+              {onToggleFavorite && (
+                <div className="w-8 h-8 flex items-center justify-center shrink-0">
+                  <FavoriteHeartButton
+                    trackId={currentTrack.id}
+                    initialFavorite={isFavorite ?? !!currentTrack.isFavorite}
+                    onToggle={() => onToggleFavorite(currentTrack)}
+                  />
                 </div>
-                <div className="text-[11px] text-zinc-400 truncate mt-0.5">
-                  {currentTrack.artist}
-                </div>
-              </div>
+              )}
             </>
           ) : (
-            <div className="flex items-center gap-3 text-zinc-500 text-xs">
-              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl ring-1 ring-white/10 bg-white/[0.04] flex items-center justify-center shrink-0">
+            <div className="flex items-center gap-2.5 sm:gap-3 text-zinc-500 text-xs min-w-0 flex-1">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl ring-1 ring-white/10 bg-white/5 flex items-center justify-center shrink-0">
                 <Music size={16} className="opacity-40" />
               </div>
-              <span className="truncate text-zinc-400 text-xs">Not Playing</span>
+              <div className="min-w-0 flex-1 flex flex-col justify-center">
+                <span className="text-xs sm:text-sm font-semibold text-zinc-400 truncate block">Not Playing</span>
+                <span className="text-[11px] text-zinc-600 truncate mt-0.5 block">Select a song</span>
+              </div>
             </div>
           )}
         </div>
 
-        {/* 2. Controls & Seeker (Center - Column 2) */}
-        <div className="hidden sm:flex flex-col items-center justify-center w-full max-w-xl mx-auto gap-1 justify-self-center px-2">
-          {/* Controls Row: Centered 5-button transport controls with 20px (gap-5) spacing */}
-          <div className="flex items-center justify-center gap-4 sm:gap-5">
+        {/* B. Center Section (Controls + Stacked Scrubber) */}
+        <div className="hidden sm:flex flex-col items-center justify-center flex-1 max-w-xl px-2">
+          {/* Row 1: Playback Buttons */}
+          <div className="flex items-center gap-4 mb-1.5">
             {/* Shuffle */}
             <button
               onClick={onToggleShuffle}
-              className={`w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/[0.06] transition-colors ${
+              className={`p-1.5 rounded-full hover:bg-white/10 transition-colors ${
                 isShuffle ? 'text-rose-500 font-semibold' : 'text-zinc-400 hover:text-white'
               }`}
               title={`Shuffle: ${isShuffle ? 'On' : 'Off'} (S)`}
             >
-              <Shuffle size={17} />
+              <Shuffle className="w-4 h-4" />
             </button>
 
             {/* Previous */}
             <button
               onClick={onPrev}
               disabled={!currentTrack}
-              className="w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center text-zinc-300 hover:text-white disabled:opacity-20 rounded-full hover:bg-white/[0.06] transition-colors"
-              title="Previous (or Left Arrow)"
+              className="p-1.5 rounded-full hover:bg-white/10 text-zinc-300 hover:text-white disabled:opacity-20 transition-colors"
+              title="Previous (Left Arrow)"
             >
-              <SkipBack size={19} fill="currentColor" />
+              <SkipBack className="w-4 h-4 fill-current" />
             </button>
 
-            {/* Solid Play / Pause Circular Button */}
+            {/* Play/Pause */}
             <button
               onClick={onTogglePlay}
               disabled={!currentTrack}
-              className="w-10 h-10 min-w-[40px] min-h-[40px] bg-white text-zinc-950 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-30 disabled:hover:scale-100 shadow-md shadow-white/20 transition-transform"
+              className="w-9 h-9 min-w-[36px] min-h-[36px] rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-30 transition-all shadow-md shadow-white/20"
               title="Play / Pause (Space)"
             >
               {isPlaying ? (
-                <Pause size={19} fill="currentColor" />
+                <Pause className="w-4 h-4 fill-current" />
               ) : (
-                <Play size={19} fill="currentColor" className="ml-0.5" />
+                <Play className="w-4 h-4 fill-current ml-0.5" />
               )}
             </button>
 
@@ -164,30 +194,30 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             <button
               onClick={onNext}
               disabled={!currentTrack}
-              className="w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center text-zinc-300 hover:text-white disabled:opacity-20 rounded-full hover:bg-white/[0.06] transition-colors"
-              title="Next (or Right Arrow)"
+              className="p-1.5 rounded-full hover:bg-white/10 text-zinc-300 hover:text-white disabled:opacity-20 transition-colors"
+              title="Next (Right Arrow)"
             >
-              <SkipForward size={19} fill="currentColor" />
+              <SkipForward className="w-4 h-4 fill-current" />
             </button>
 
             {/* Repeat */}
             <button
               onClick={onCycleRepeat}
-              className={`w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/[0.06] transition-colors relative ${
+              className={`p-1.5 rounded-full hover:bg-white/10 transition-colors relative ${
                 repeatMode !== 'off' ? 'text-rose-500 font-semibold' : 'text-zinc-400 hover:text-white'
               }`}
               title={`Repeat: ${repeatMode} (L)`}
             >
-              <Repeat size={17} />
+              <Repeat className="w-4 h-4" />
               {repeatMode === 'one' && (
-                <span className="absolute top-1.5 right-1.5 text-[8px] font-bold bg-rose-500 text-white rounded-full w-3 h-3 flex items-center justify-center">
+                <span className="absolute top-0 right-0 text-[8px] font-bold bg-rose-500 text-white rounded-full w-2.5 h-2.5 flex items-center justify-center">
                   1
                 </span>
               )}
             </button>
           </div>
 
-          {/* Timeline Row */}
+          {/* Row 2: Progress Bar & Timestamps */}
           <AudioSeeker
             currentTime={currentTime}
             duration={duration}
@@ -198,43 +228,43 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           />
         </div>
 
-        {/* 3. Mobile Compact Play & Next Controls (48x48px tap targets, sm:hidden) */}
-        <div className="sm:hidden flex items-center gap-1 shrink-0">
+        {/* Mobile Compact Play & Next Controls (sm:hidden) */}
+        <div className="sm:hidden flex items-center gap-1.5 shrink-0">
           <button
             onClick={onPrev}
             disabled={!currentTrack}
-            className="w-12 h-12 min-w-[48px] min-h-[48px] flex items-center justify-center text-zinc-300 hover:text-white disabled:opacity-30 rounded-full active:bg-white/10 touch-manipulation"
+            className="p-2 text-zinc-300 hover:text-white disabled:opacity-20 active:scale-95 transition-all touch-manipulation cursor-pointer"
             aria-label="Previous Track"
           >
-            <SkipBack size={19} fill="currentColor" />
+            <SkipBack size={18} fill="currentColor" />
           </button>
 
           <button
             onClick={onTogglePlay}
             disabled={!currentTrack}
-            className="w-12 h-12 min-w-[48px] min-h-[48px] bg-white text-zinc-950 rounded-full flex items-center justify-center disabled:opacity-30 shadow-md active:scale-95 transition-transform touch-manipulation"
+            className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center disabled:opacity-30 active:scale-95 transition-all shadow-md touch-manipulation cursor-pointer"
             aria-label={isPlaying ? 'Pause' : 'Play'}
           >
             {isPlaying ? (
-              <Pause size={18} fill="currentColor" />
+              <Pause size={17} fill="currentColor" />
             ) : (
-              <Play size={18} fill="currentColor" className="ml-0.5" />
+              <Play size={17} fill="currentColor" className="ml-0.5" />
             )}
           </button>
 
           <button
             onClick={onNext}
             disabled={!currentTrack}
-            className="w-12 h-12 min-w-[48px] min-h-[48px] flex items-center justify-center text-zinc-300 hover:text-white disabled:opacity-30 rounded-full active:bg-white/10 touch-manipulation"
+            className="p-2 text-zinc-300 hover:text-white disabled:opacity-20 active:scale-95 transition-all touch-manipulation cursor-pointer"
             aria-label="Next Track"
           >
-            <SkipForward size={19} fill="currentColor" />
+            <SkipForward size={18} fill="currentColor" />
           </button>
 
           <button
             onClick={onOpenFullscreen}
             disabled={!currentTrack}
-            className="w-12 h-12 min-w-[48px] min-h-[48px] flex items-center justify-center text-zinc-400 hover:text-white disabled:opacity-30 rounded-full active:bg-white/10 touch-manipulation"
+            className="p-2 text-zinc-400 hover:text-white disabled:opacity-20 active:scale-95 transition-all touch-manipulation cursor-pointer"
             title="Fullscreen visualizer"
             aria-label="Fullscreen Player"
           >
@@ -242,12 +272,12 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           </button>
         </div>
 
-        {/* 4. Desktop Extras & Volume (Anchor Right - Column 3) */}
-        <div className="hidden sm:flex items-center justify-end gap-2.5 justify-self-end shrink-0 pb-[15px]">
+        {/* C. Right Section (Utility Tools + Subtle Volume) */}
+        <div className="hidden sm:flex items-center justify-end gap-3 w-1/4 min-w-[200px] shrink-0 text-zinc-400">
           {/* Playback Speed */}
           <button
             onClick={() => onChangePlaybackRate(nextRate)}
-            className="text-[10px] font-mono px-2 py-0.5 bg-white/[0.06] hover:bg-white/10 text-zinc-400 hover:text-white rounded-full transition-colors mr-0.5"
+            className="text-xs font-mono px-1.5 py-0.5 rounded hover:bg-white/5 text-zinc-400 hover:text-white transition-colors"
             title="Playback Speed"
           >
             {playbackRate}x
@@ -256,16 +286,16 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           {/* Sleep Timer */}
           <button
             onClick={onOpenSleepTimer}
-            className={`w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/[0.06] transition-colors relative ${
+            className={`p-1.5 rounded-full hover:bg-white/5 transition-colors relative ${
               sleepTimer.isActive
-                ? 'text-rose-500'
+                ? 'text-white'
                 : 'text-zinc-400 hover:text-white'
             }`}
             title="Sleep & Play Timer (T)"
           >
-            <Timer size={17} />
+            <Timer size={16} />
             {sleepTimer.isActive && (
-              <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
             )}
           </button>
 
@@ -274,7 +304,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             <button
               onClick={onOpenLyrics}
               disabled={!currentTrack}
-              className="w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/[0.06] disabled:opacity-30 rounded-full transition-colors"
+              className="p-1.5 rounded-full hover:bg-white/5 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors"
               title="Synchronized Lyrics (L)"
               aria-label="Open Synchronized Lyrics"
             >
@@ -286,31 +316,74 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           <button
             onClick={onOpenFullscreen}
             disabled={!currentTrack}
-            className="w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/[0.06] disabled:opacity-30 rounded-full transition-colors"
+            className="p-1.5 rounded-full hover:bg-white/5 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors"
             title="Immersive Visualizer (F)"
           >
-            <Maximize2 size={17} />
+            <Maximize2 size={16} />
           </button>
 
-          {/* Integrated Volume Slider with Fluid Dragging */}
-          <div className="hidden md:flex items-center gap-1.5 group pl-1">
+          {/* Subtle volume slider (thin monochrome line, no loud highlight) */}
+          <div 
+            className="hidden md:flex items-center gap-1.5 group/volume relative select-none shrink-0"
+            onWheel={(e) => {
+              e.preventDefault();
+              const delta = e.deltaY < 0 ? 0.03 : -0.03;
+              const currentVal = isMuted ? 0 : volume;
+              const nextVal = Math.max(0, Math.min(1, Math.round((currentVal + delta) * 100) / 100));
+              onVolumeChange(nextVal);
+            }}
+          >
+            {/* Dynamic Mute/Volume Icon Button */}
             <button
               onClick={onToggleMute}
-              className="w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center text-zinc-400 hover:text-white rounded-full transition-colors"
-              title="Mute / Unmute (M)"
+              className="p-1.5 rounded-full hover:bg-white/5 text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer shrink-0"
+              title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
+              aria-label={isMuted ? 'Unmute' : 'Mute'}
             >
-              {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              {isMuted || volume === 0 ? (
+                <VolumeX className="w-4 h-4 text-zinc-500" />
+              ) : volume < 0.5 ? (
+                <Volume1 className="w-4 h-4 text-zinc-400" />
+              ) : (
+                <Volume2 className="w-4 h-4 text-zinc-400" />
+              )}
             </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={isMuted ? 0 : volume}
-              onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-              className="w-16 lg:w-20 h-1 bg-white/20 rounded-full appearance-none accent-white hover:accent-rose-500 cursor-pointer"
-              title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
-            />
+
+            {/* Ultra-thin Monochrome Slider Track */}
+            <div className="w-20 md:w-24 flex items-center relative h-5">
+              {/* Track background */}
+              <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative cursor-pointer">
+                {/* Active Fill */}
+                <div
+                  className="h-full bg-zinc-400 group-hover/volume:bg-white rounded-full transition-colors"
+                  style={{ width: `${isMuted ? 0 : volume * 100}%` }}
+                />
+              </div>
+
+              {/* Slider Thumb (Tactile Knob) */}
+              <div
+                className="w-2 h-2 rounded-full bg-zinc-300 shadow-sm absolute top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none group-hover/volume:bg-white transition-colors"
+                style={{ left: `${isMuted ? 0 : volume * 100}%` }}
+              />
+
+              {/* Hidden Range Input */}
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={isMuted ? 0 : volume}
+                onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+                className="w-full h-full opacity-0 absolute inset-0 cursor-pointer"
+                title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                aria-label="Volume slider"
+              />
+            </div>
+
+            {/* Subdued loudness readout */}
+            <span className="text-[10px] font-mono tabular-nums text-zinc-500 group-hover/volume:text-zinc-300 min-w-[24px] text-right transition-colors select-none font-normal">
+              {Math.round((isMuted ? 0 : volume) * 100)}%
+            </span>
           </div>
         </div>
       </div>

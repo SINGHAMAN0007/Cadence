@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface AudioSeekerProps {
   currentTime: number;
@@ -21,11 +21,13 @@ export const AudioSeeker: React.FC<AudioSeekerProps> = ({
   accentColor = 'rose',
   showTooltip = true,
 }) => {
+  // Explicit dragging state to eliminate lag & snapback
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const [scrubTime, setScrubTime] = useState(0);
+  const [scrubPercent, setScrubPercent] = useState<number | null>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState<number>(0);
-  const trackRef = useRef<HTMLDivElement>(null);
+
+  const progressBarRef = useRef<HTMLDivElement>(null);
 
   const formatTime = (seconds: number) => {
     if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -34,173 +36,178 @@ export const AudioSeeker: React.FC<AudioSeekerProps> = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const calculateTimeFromClientX = useCallback(
-    (clientX: number) => {
-      if (!trackRef.current || duration <= 0) return 0;
-      const rect = trackRef.current.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      return ratio * duration;
-    },
-    [duration]
-  );
+  // Calculate percentage (0-100) strictly from client coordinates
+  const calculatePercentFromEvent = (e: React.PointerEvent | PointerEvent | Touch) => {
+    if (!progressBarRef.current) return 0;
+    const rect = progressBarRef.current.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    const pos = (e.clientX - rect.left) / rect.width;
+    return Math.max(0, Math.min(100, pos * 100));
+  };
 
-  // Active displayed time and progress percentage
-  const activeTime = isScrubbing ? scrubTime : currentTime;
-  const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (activeTime / duration) * 100)) : 0;
+  // Optimistic display position immediately during dragging
+  const displayPercent =
+    isScrubbing && scrubPercent !== null
+      ? scrubPercent
+      : duration > 0
+      ? Math.min(100, Math.max(0, (currentTime / duration) * 100))
+      : 0;
 
-  // Handle pointer down (mouse or mobile touch)
+  // Active time for timestamps (optimistic while scrubbing)
+  const displayTime =
+    isScrubbing && scrubPercent !== null
+      ? (scrubPercent / 100) * (duration || 0)
+      : currentTime;
+
+  // Unified Pointer Handlers for precision drag & click
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (duration <= 0) return;
     e.preventDefault();
     e.stopPropagation();
 
     try {
-      e.currentTarget.setPointerCapture(e.pointerId);
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
-      // Ignore if pointer capture isn't available
+      // Fallback if capture not available
     }
 
-    const newTime = calculateTimeFromClientX(e.clientX);
     setIsScrubbing(true);
-    setScrubTime(newTime);
+    const pct = calculatePercentFromEvent(e);
+    setScrubPercent(pct);
   };
 
-  // Handle pointer move during drag/scrub
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!trackRef.current || duration <= 0) return;
+    if (!progressBarRef.current) return;
 
     if (isScrubbing) {
       e.preventDefault();
-      const newTime = calculateTimeFromClientX(e.clientX);
-      setScrubTime(newTime);
+      const pct = calculatePercentFromEvent(e);
+      setScrubPercent(pct);
     } else if (showTooltip && layout !== 'minimal') {
-      const rect = trackRef.current.getBoundingClientRect();
+      const rect = progressBarRef.current.getBoundingClientRect();
       const clientX = e.clientX;
       const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
       setHoverX(x);
-      setHoverTime(calculateTimeFromClientX(clientX));
+      if (duration > 0 && rect.width > 0) {
+        setHoverTime((x / rect.width) * duration);
+      }
     }
   };
 
-  // Handle pointer release - commit final seek time
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isScrubbing) return;
     e.preventDefault();
     e.stopPropagation();
 
     try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
       // Ignore
     }
 
-    const finalTime = calculateTimeFromClientX(e.clientX);
+    const pct = calculatePercentFromEvent(e);
+    const targetTime = (pct / 100) * (duration || 0);
+
+    if (isFinite(targetTime)) {
+      onSeek(targetTime);
+    }
     setIsScrubbing(false);
-    onSeek(finalTime);
+    setScrubPercent(null);
   };
 
-  const handlePointerCancel = () => {
+  const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
     if (isScrubbing) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      if (scrubPercent !== null) {
+        const targetTime = (scrubPercent / 100) * (duration || 0);
+        if (isFinite(targetTime)) {
+          onSeek(targetTime);
+        }
+      }
       setIsScrubbing(false);
-      onSeek(scrubTime);
+      setScrubPercent(null);
     }
   };
 
-  // Explicit touch events fallback
-  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (duration <= 0 || !e.touches[0]) return;
-    const touch = e.touches[0];
-    const newTime = calculateTimeFromClientX(touch.clientX);
-    setIsScrubbing(true);
-    setScrubTime(newTime);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (!isScrubbing || !e.touches[0]) return;
-    const touch = e.touches[0];
-    const newTime = calculateTimeFromClientX(touch.clientX);
-    setScrubTime(newTime);
-  };
-
-  const handleTouchEnd = () => {
-    if (!isScrubbing) return;
-    setIsScrubbing(false);
-    onSeek(scrubTime);
-  };
-
-  // Global safety listener in case pointer capture is dropped
+  // Window fallback safety to guarantee release of scrubbing state
   useEffect(() => {
-    const handleGlobalMouseUp = () => {
+    const handleGlobalPointerUp = () => {
       if (isScrubbing) {
+        if (scrubPercent !== null) {
+          const targetTime = (scrubPercent / 100) * (duration || 0);
+          if (isFinite(targetTime)) {
+            onSeek(targetTime);
+          }
+        }
         setIsScrubbing(false);
-        onSeek(scrubTime);
+        setScrubPercent(null);
       }
     };
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, [isScrubbing, scrubTime, onSeek]);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('mouseup', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('mouseup', handleGlobalPointerUp);
+    };
+  }, [isScrubbing, scrubPercent, duration, onSeek]);
 
   // Track component
   const trackElement = (
     <div
-      ref={trackRef}
+      ref={progressBarRef}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
       onMouseLeave={() => setHoverTime(null)}
       className={`relative w-full cursor-pointer group touch-none select-none flex items-center ${
         layout === 'minimal'
-          ? 'h-4 -top-2 py-0 pt-[7px]'
+          ? 'h-[2px] py-0'
           : layout === 'inline'
-          ? 'py-2.5 h-7'
-          : 'py-3'
+          ? 'h-3'
+          : 'py-2 h-6'
       }`}
-      style={layout === 'minimal' ? { paddingTop: '7px' } : undefined}
       role="slider"
       aria-label="Audio progress slider"
       aria-valuemin={0}
       aria-valuemax={duration}
-      aria-valuenow={activeTime}
-      aria-valuetext={`${formatTime(activeTime)} of ${formatTime(duration)}`}
+      aria-valuenow={displayTime}
+      aria-valuetext={`${formatTime(displayTime)} of ${formatTime(duration)}`}
     >
-      {/* Track Line: Sleek 3px to 4px resting, subtly expanding to 5px–6px on interaction */}
+      {/* Track Background Line */}
       <div
-        className={`w-full bg-white/20 rounded-full overflow-hidden relative transition-all duration-150 ${
-          isScrubbing
-            ? 'h-[5px] bg-white/30'
-            : layout === 'minimal'
-            ? 'h-[2.5px] group-hover:h-[4px]'
-            : 'h-[3.5px] group-hover:h-[5px]'
+        className={`w-full relative overflow-hidden ${
+          layout === 'minimal'
+            ? 'h-[2px] bg-white/10'
+            : layout === 'inline'
+            ? 'h-1 group-hover:h-1.5 bg-white/10 rounded-full transition-all'
+            : isScrubbing
+            ? 'h-1.5 bg-white/20 rounded-full'
+            : 'h-1 group-hover:h-1.5 bg-white/15 rounded-full transition-all'
         }`}
       >
-        {/* Progress Fill */}
+        {/* Progress Fill: Bound strictly to displayPercent with no lag during scrubbing */}
         <div
-          className={`h-full rounded-full transition-[width] ease-out ${
-            isScrubbing ? 'duration-0' : 'duration-100'
-          } ${
-            accentColor === 'rose'
-              ? 'bg-rose-500'
-              : 'bg-white group-hover:bg-rose-500'
-          }`}
-          style={{ width: `${progressPercent}%` }}
+          className={`h-full ${
+            isScrubbing ? 'transition-none' : 'transition-[width] duration-100 ease-linear'
+          } ${accentColor === 'white' ? 'bg-white' : 'bg-rose-500'}`}
+          style={{ width: `${displayPercent}%` }}
         />
       </div>
 
-      {/* Scrubber Thumb / Handle: Circular thumb with active glow ring */}
-      <div
-        className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow-lg pointer-events-none transition-transform duration-150 ${
-          layout === 'minimal' ? 'w-3 h-3' : 'w-3.5 h-3.5'
-        } ${
-          isScrubbing
-            ? 'scale-125 ring-4 ring-white/25 shadow-rose-500/40'
-            : 'scale-0 group-hover:scale-100 group-active:scale-125'
-        }`}
-        style={{ left: `${progressPercent}%` }}
-      />
+      {/* Scrubber Thumb / Handle: Bound strictly to displayPercent with zero desync */}
+      {layout !== 'minimal' && (
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.7)] pointer-events-none ${
+            isScrubbing
+              ? 'transition-none opacity-100 scale-125 ring-4 ring-white/25'
+              : 'transition-[transform,opacity] duration-150 opacity-100 scale-100 group-hover:scale-125'
+          } ${layout === 'inline' ? 'w-2.5 h-2.5' : 'w-3 h-3 sm:w-3.5 sm:h-3.5'}`}
+          style={{ left: `${displayPercent}%` }}
+        />
+      )}
 
       {/* Hover Tooltip (Desktop) */}
       {showTooltip && layout !== 'minimal' && !isScrubbing && hoverTime !== null && (
@@ -223,16 +230,16 @@ export const AudioSeeker: React.FC<AudioSeekerProps> = ({
       <div className={`w-full flex items-center gap-2.5 select-none ${className}`}>
         {showTimestamps && (
           <span
-            className={`text-[10px] font-mono tabular-nums w-8 text-right shrink-0 transition-colors ${
-              isScrubbing ? 'text-rose-400 font-semibold' : 'text-zinc-400'
+            className={`text-[11px] font-mono tabular-nums w-8 text-right shrink-0 select-none transition-colors ${
+              isScrubbing ? 'text-white font-semibold' : 'text-zinc-400'
             }`}
           >
-            {formatTime(activeTime)}
+            {formatTime(displayTime)}
           </span>
         )}
-        <div className="flex-1">{trackElement}</div>
+        <div className="flex-1 min-w-0 relative flex items-center">{trackElement}</div>
         {showTimestamps && (
-          <span className="text-[10px] text-zinc-400 font-mono tabular-nums w-8 shrink-0">
+          <span className="text-[11px] text-zinc-400 font-mono tabular-nums w-8 text-left shrink-0 select-none">
             {formatTime(duration)}
           </span>
         )}
@@ -245,13 +252,13 @@ export const AudioSeeker: React.FC<AudioSeekerProps> = ({
     <div className={`w-full select-none ${className}`}>
       {trackElement}
       {showTimestamps && (
-        <div className="flex justify-between items-center text-xs font-mono text-zinc-400 mt-1 select-none tabular-nums">
+        <div className="flex justify-between items-center text-[10px] sm:text-[11px] font-mono text-zinc-400 mt-1 select-none tabular-nums">
           <span
             className={`transition-colors ${
-              isScrubbing ? 'text-rose-400 font-semibold scale-105' : 'text-zinc-400'
+              isScrubbing ? 'text-white font-semibold scale-105' : 'text-zinc-400'
             }`}
           >
-            {formatTime(activeTime)}
+            {formatTime(displayTime)}
           </span>
           <span className="text-zinc-400">{formatTime(duration)}</span>
         </div>

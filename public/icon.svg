@@ -1,9 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="112" fill="#000000"/>
-  <!-- Outer red ring -->
-  <path d="M256 36 C134.5 36 36 134.5 36 256 C36 377.5 134.5 476 256 476 C377.5 476 476 377.5 476 256 C476 134.5 377.5 36 256 36 Z M256 86 C349.9 86 426 162.1 426 256 C426 349.9 349.9 426 256 426 C162.1 426 86 349.9 86 256 C86 162.1 162.1 86 256 86 Z" fill="#FF0000"/>
-  <!-- Inner red disc -->
-  <circle cx="256" cy="256" r="130" fill="#FF0000"/>
-  <!-- Center white play triangle -->
-  <path d="M216 186 C216 180.5 222 177 227 180 L320 250 C324.5 253 324.5 259 320 262 L227 332 C222 335 216 331.5 216 326 Z" fill="#FFFFFF"/>
+  <defs>
+    <linearGradient id="appleMusicGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF3B30" />
+      <stop offset="100%" stop-color="#FF2D55" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#appleMusicGrad)" />
+  <g transform="translate(102, 102) scale(12.8)">
+    <path fill="#FFFFFF" d="M19.5 3.5 9.5 5.8C8.7 6 8 6.7 8 7.6V16.7C7.3 16.3 6.4 16 5.5 16 3.6 16 2 17.3 2 19s1.6 3 3.5 3 3.5-1.3 3.5-3V9.6l10-2.3v7.4c-.7-.4-1.6-.7-2.5-.7-1.9 0-3.5 1.3-3.5 3s1.6 3 3.5 3 3.5-1.3 3.5-3V4.5c0-.6-.5-1.1-1-.9z"/>
+  </g>
 </svg>

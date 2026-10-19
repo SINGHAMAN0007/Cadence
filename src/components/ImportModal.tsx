@@ -1,17 +1,18 @@
 import React, { useState, useRef } from 'react';
 import { 
-  X, UploadCloud, FolderUp, Link as LinkIcon, Sparkles, 
-  FileAudio, Check, AlertCircle, Loader2 
+  X, UploadCloud, FolderUp, Link as LinkIcon, 
+  FileAudio, Check, AlertCircle, Loader2, ArrowUp
 } from 'lucide-react';
+import { ModalBackdrop } from './ModalBackdrop';
 
 interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportFiles: (files: FileList | File[]) => Promise<void>;
   onImportFolder: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onLoadDemoTracks: () => void;
+  onLoadDemoTracks?: () => void;
   isImporting: boolean;
-  isLoadingDemo: boolean;
+  isLoadingDemo?: boolean;
 }
 
 export const ImportModal: React.FC<ImportModalProps> = ({
@@ -27,6 +28,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [audioUrl, setAudioUrl] = useState('');
   const [isUrlDownloading, setIsUrlDownloading] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -94,6 +96,29 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     }
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await onImportFiles(e.dataTransfer.files);
+      onClose();
+    }
+  };
+
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!audioUrl.trim()) return;
@@ -118,49 +143,51 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150">
-      <div 
-        className="w-full max-w-md bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-5 text-zinc-100"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between pb-3.5 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-rose-500">
-              <UploadCloud size={18} />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-white tracking-tight">Import Music</h2>
-              <p className="text-[11px] text-zinc-400">Save audio tracks to your persistent browser library</p>
-            </div>
+    <ModalBackdrop
+      isOpen={isOpen}
+      onClose={onClose}
+      className="max-w-lg bg-[#0a0a0a] p-6 text-zinc-100"
+    >
+      {/* Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-white/10">
+          <div>
+            <h2 className="text-base font-semibold text-white">Import Audio</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">Select local audio files or drag and drop folders into your library</p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-full transition-colors"
+            className="p-1.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+            title="Close"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </div>
 
-        {/* Tab switch */}
-        <div className="flex p-1 bg-white/[0.06] rounded-full my-4">
+        {/* Tab Switcher */}
+        <div className="w-full p-1 bg-white/[0.04] border border-white/5 rounded-xl flex items-center gap-1 my-4">
           <button
+            type="button"
             onClick={() => setActiveTab('files')}
-            className={`flex-1 py-1.5 text-xs font-medium rounded-full transition-colors flex items-center justify-center gap-1.5 ${
-              activeTab === 'files' ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-white'
+            className={`flex-1 h-9 px-3 rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'files'
+                ? 'bg-white/10 text-white shadow-sm border border-white/10'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.03]'
             }`}
           >
-            <FileAudio size={14} />
-            <span>Local Files</span>
+            <FileAudio className={`w-3.5 h-3.5 shrink-0 ${activeTab === 'files' ? 'text-white' : 'text-zinc-400'}`} />
+            <span>Local Files & Folders</span>
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('url')}
-            className={`flex-1 py-1.5 text-xs font-medium rounded-full transition-colors flex items-center justify-center gap-1.5 ${
-              activeTab === 'url' ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-white'
+            className={`flex-1 h-9 px-3 rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'url'
+                ? 'bg-white/10 text-white shadow-sm border border-white/10'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.03]'
             }`}
           >
-            <LinkIcon size={14} />
-            <span>From Web URL</span>
+            <LinkIcon className={`w-3.5 h-3.5 shrink-0 ${activeTab === 'url' ? 'text-white' : 'text-zinc-400'}`} />
+            <span>Web URL</span>
           </button>
         </div>
 
@@ -171,7 +198,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               ref={fileInputRef}
               type="file"
               multiple
-              accept="audio/*"
+              accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,.weba"
               onChange={handleFileChange}
               className="hidden"
             />
@@ -189,59 +216,78 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               className="hidden"
             />
 
-            {/* Choose files button */}
-            <button
+            {/* Drag-and-Drop Dropzone */}
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              disabled={isImporting}
-              className="w-full p-4 rounded-xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] active:bg-white/[0.1] transition-all text-left flex items-center gap-3.5 group"
+              className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors cursor-pointer group ${
+                isDragging
+                  ? 'border-white/40 bg-white/[0.06]'
+                  : 'border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]'
+              }`}
             >
-              <div className="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-rose-500/20 group-hover:scale-105 transition-transform">
-                {isImporting ? <Loader2 size={18} className="animate-spin" /> : <UploadCloud size={20} />}
+              <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-3">
+                {isImporting ? (
+                  <Loader2 size={24} className="animate-spin text-white" />
+                ) : (
+                  <ArrowUp className="w-8 h-8 text-zinc-400 group-hover:text-white transition-colors" />
+                )}
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-semibold text-white">Select Audio Files</div>
-                <div className="text-[11px] text-zinc-400 mt-0.5">MP3, WAV, FLAC, AAC, M4A, OGG from your phone or PC</div>
-              </div>
-            </button>
 
-            {/* Choose folder (window.showDirectoryPicker or webkitdirectory) */}
-            <button
-              onClick={handleSelectFolder}
-              disabled={isImporting || isScanningFolder}
-              className="w-full min-h-[48px] p-3 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.06] active:bg-white/[0.08] transition-colors text-left flex items-center gap-3 touch-manipulation"
-            >
-              <div className="w-9 h-9 rounded-lg bg-white/[0.06] text-zinc-300 flex items-center justify-center shrink-0">
-                {isScanningFolder ? <Loader2 size={16} className="animate-spin text-rose-400" /> : <FolderUp size={16} />}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-zinc-200">
-                  {isScanningFolder ? 'Scanning Folder Audio...' : 'Select Folder'}
-                </div>
-                <div className="text-[10px] text-zinc-400">
-                  Recursively index audio files (.mp3, .wav, .flac, .m4a, .aac)
-                </div>
-              </div>
-            </button>
-
-            {/* Load instant demo tracks */}
-            <div className="pt-2 border-t border-white/[0.06]">
               <button
-                onClick={() => {
-                  onLoadDemoTracks();
-                  onClose();
+                type="button"
+                disabled={isImporting}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileInputRef.current?.click();
                 }}
-                disabled={isLoadingDemo}
-                className="w-full py-2 px-3 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-rose-300 hover:text-white border border-white/10 text-xs font-medium transition-colors flex items-center justify-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white text-black font-semibold text-xs hover:bg-zinc-200 transition-colors shadow-sm cursor-pointer"
               >
-                <Sparkles size={14} className="text-rose-400" />
-                <span>{isLoadingDemo ? 'Synthesizing...' : 'Load 3 Free Synth Demo Tracks'}</span>
+                Browse Files
               </button>
+
+              <span className="text-[11px] text-zinc-500 mt-2 font-mono">
+                Supports MP3, FLAC, WAV, AAC, M4A, OGG
+              </span>
+            </div>
+
+            {/* Secondary actions: Folder Picker & Demo library */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleSelectFolder}
+                disabled={isImporting || isScanningFolder}
+                className="flex-1 py-2.5 px-3 rounded-xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.06] text-xs font-medium text-zinc-300 hover:text-white transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isScanningFolder ? (
+                  <Loader2 size={14} className="animate-spin text-zinc-300" />
+                ) : (
+                  <FolderUp size={14} className="text-zinc-400" />
+                )}
+                <span>{isScanningFolder ? 'Scanning Folder...' : 'Import Folder'}</span>
+              </button>
+
+              {onLoadDemoTracks && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLoadDemoTracks();
+                    onClose();
+                  }}
+                  disabled={isLoadingDemo}
+                  className="py-2.5 px-3 rounded-xl border border-white/5 bg-white/[0.03] hover:bg-white/[0.06] text-xs font-medium text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  {isLoadingDemo ? 'Loading...' : 'Load Sample Songs'}
+                </button>
+              )}
             </div>
           </div>
         ) : (
-          <form onSubmit={handleUrlSubmit} className="space-y-3">
+          <form onSubmit={handleUrlSubmit} className="space-y-3.5">
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+              <label className="block text-[11px] font-medium text-zinc-400 uppercase tracking-wider mb-1.5">
                 Direct Audio File URL
               </label>
               <input
@@ -249,41 +295,50 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 required
                 value={audioUrl}
                 onChange={(e) => setAudioUrl(e.target.value)}
-                placeholder="https://example.com/music/song.mp3"
-                className="w-full bg-white/[0.06] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+                placeholder="https://example.com/audio/song.mp3"
+                className="w-full h-10 px-3.5 rounded-xl bg-white/[0.04] border border-white/10 focus:border-white/25 text-xs text-white placeholder-zinc-500 focus:outline-none transition-colors"
               />
-              <p className="text-[10px] text-zinc-400 mt-1">
-                Paste any direct link to an MP3 or WAV file to download it into your local browser library.
+              <p className="text-[11px] text-zinc-500 mt-1.5">
+                Paste any direct link to an MP3, FLAC, or WAV file to save it directly into your local library.
               </p>
             </div>
 
             {urlError && (
-              <div className="p-2.5 rounded-lg bg-red-950/60 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
-                <AlertCircle size={14} className="shrink-0 text-red-400" />
+              <div className="p-3 rounded-xl bg-white/[0.03] border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
+                <AlertCircle size={14} className="shrink-0" />
                 <span>{urlError}</span>
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={!audioUrl.trim() || isUrlDownloading}
-              className="w-full py-2.5 px-4 bg-rose-500 hover:bg-rose-400 disabled:opacity-40 text-white rounded-full text-xs font-medium shadow-md shadow-rose-500/20 transition-all flex items-center justify-center gap-1.5"
-            >
-              {isUrlDownloading ? (
-                <>
-                  <Loader2 size={14} className="animate-spin" />
-                  <span>Downloading & Importing...</span>
-                </>
-              ) : (
-                <>
-                  <Check size={14} />
-                  <span>Download & Save to Library</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('files')}
+                className="px-4 h-9 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-zinc-300 transition-colors cursor-pointer"
+              >
+                Back
+              </button>
+
+              <button
+                type="submit"
+                disabled={!audioUrl.trim() || isUrlDownloading}
+                className="px-5 h-9 rounded-xl bg-white text-black font-semibold text-xs hover:bg-zinc-200 transition-colors shadow-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+              >
+                {isUrlDownloading ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    <span>Downloading...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={13} />
+                    <span>Save to Library</span>
+                  </>
+                )}
+              </button>
+            </div>
           </form>
         )}
-      </div>
-    </div>
+    </ModalBackdrop>
   );
 };

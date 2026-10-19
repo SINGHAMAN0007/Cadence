@@ -1,9 +1,9 @@
 import type { MusicCategory } from '../types';
 
 export const CATEGORIES: { id: MusicCategory; label: string; icon: string }[] = [
-  { id: 'Hindi', label: 'Hindi', icon: '🇮🇳' },
-  { id: 'English', label: 'English', icon: '🌐' },
-  { id: 'Phonk', label: 'Phonk', icon: '⚡' },
+  { id: 'Hindi', label: 'Hindi', icon: '' },
+  { id: 'English', label: 'English', icon: '' },
+  { id: 'Phonk', label: 'Phonk', icon: '' },
 ];
 
 export const CATEGORY_GENRES: Record<MusicCategory, string[]> = {

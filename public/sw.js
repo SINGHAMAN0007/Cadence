@@ -1,10 +1,12 @@
 // Service Worker for 100% Offline Music Player (Zero Data Playback)
-const CACHE_NAME = 'cadence-music-v2';
+const CACHE_NAME = 'cadence-music-v3';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
   '/icon.svg',
+  '/favicon.png',
+  '/muslogo.png',
   '/pwa-192x192.png',
   '/pwa-512x512.png',
   '/pwa-maskable-512x512.png',

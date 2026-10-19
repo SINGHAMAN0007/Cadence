@@ -64,41 +64,48 @@ if (!fs.existsSync(outDir)) {
   fs.mkdirSync(outDir, { recursive: true });
 }
 
-// Point-in-triangle test with barycentric coordinates
-function pointInTriangle(px, py, x1, y1, x2, y2, x3, y3) {
-  const d1 = (px - x2) * (y1 - y2) - (x1 - x2) * (py - y2);
-  const d2 = (px - x3) * (y2 - y3) - (x2 - x3) * (py - y3);
-  const d3 = (px - x1) * (y3 - y1) - (x3 - x1) * (py - y1);
-
-  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-
-  return !(hasNeg && hasPos);
+// Distance to rounded rectangle
+function sdRoundedRect(px, py, rx, ry, rw, rh, radius) {
+  // Center is rx + rw/2, ry + rh/2
+  const cx = rx + rw / 2;
+  const cy = ry + rh / 2;
+  const dx = Math.abs(px - cx) - (rw / 2 - radius);
+  const dy = Math.abs(py - cy) - (rh / 2 - radius);
+  const outsideDist = Math.hypot(Math.max(dx, 0), Math.max(dy, 0));
+  const insideDist = Math.min(Math.max(dx, dy), 0);
+  return outsideDist + insideDist - radius;
 }
 
-function renderIcon(size, isMaskable = false) {
-  const cx = size / 2;
-  const cy = size / 2;
+// Check if point is inside rotated ellipse (notehead)
+function insideNoteHead(px, py, cx, cy, rx, ry, angleRad) {
+  const cos = Math.cos(-angleRad);
+  const sin = Math.sin(-angleRad);
+  const dx = px - cx;
+  const dy = py - cy;
+  const nx = dx * cos - dy * sin;
+  const ny = dx * sin + dy * cos;
+  return (nx * nx) / (rx * rx) + (ny * ny) / (ry * ry) <= 1.0;
+}
 
-  // YT Music Logo proportions:
-  // Outer circle radius
-  const rMax = isMaskable ? size * 0.40 : size * 0.45;
-  // Outer ring inner boundary (thickness ~ 11% of outer radius)
-  const rRingInner = rMax * (9.273 / 12.0);
-  // Inner red disc radius (approx 59% of outer radius)
-  const rDisc = rMax * (7.091 / 12.0);
+function renderAppleMusicIcon(size, isMaskable = false) {
+  // Proportions in 0..size coordinates
+  // Normalized 0..1 coordinates
+  const margin = isMaskable ? 0.10 : 0.04;
+  const cardSize = 1.0 - 2 * margin;
+  const cornerRadius = cardSize * 0.225; // standard Apple iOS app icon continuous corner radius ratio
 
-  // Play triangle vertices inside inner disc
-  // In standard YT Music logo, triangle is optically centered:
-  const tX1 = cx - rDisc * 0.31;
-  const tY1 = cy - rDisc * 0.54;
-  const tX2 = cx + rDisc * 0.49;
-  const tY2 = cy;
-  const tX3 = cx - rDisc * 0.31;
-  const tY3 = cy + rDisc * 0.54;
+  // Gradient: top-left (#FF3B30 -> rgb(255, 59, 48)) to bottom-right (#FF2D55 -> rgb(255, 45, 85))
+  // Double eighth note parameters mapped to normalized 0..1 space:
+  // Note 1 (left):
+  // center of note head ~ (0.34, 0.72), radius a=0.088, b=0.065, rotated ~ -20 deg (-0.35 rad)
+  // left stem: x from 0.40 to 0.445, y from 0.31 to 0.72
+  // Note 2 (right):
+  // center of note head ~ (0.67, 0.64), radius a=0.088, b=0.065, rotated ~ -20 deg (-0.35 rad)
+  // right stem: x from 0.73 to 0.775, y from 0.23 to 0.64
+  // Beam: connects stems at top. Slanted beam from y ~ 0.20-0.31 on left to 0.12-0.23 on right
 
   return createPng(size, size, (x, y) => {
-    // 2x2 supersampling for smooth antialiasing
+    // 2x2 supersampling
     let totalR = 0;
     let totalG = 0;
     let totalB = 0;
@@ -112,46 +119,99 @@ function renderIcon(size, isMaskable = false) {
     ];
 
     for (const [ox, oy] of samples) {
-      const px = x + ox;
-      const py = y + oy;
-      const dx = px - cx;
-      const dy = py - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const px = (x + ox) / size;
+      const py = (y + oy) / size;
 
-      if (dist <= rMax && dist >= rRingInner) {
-        // Red outer ring
-        totalR += 255;
-        totalG += 0;
-        totalB += 0;
-        totalA += 255;
-      } else if (dist < rRingInner && dist > rDisc) {
-        // Black gap
-        totalR += 0;
-        totalG += 0;
-        totalB += 0;
-        totalA += 255;
-      } else if (dist <= rDisc) {
-        // Inner disc
-        if (pointInTriangle(px, py, tX1, tY1, tX2, tY2, tX3, tY3)) {
-          // White play button
-          totalR += 255;
-          totalG += 255;
-          totalB += 255;
-          totalA += 255;
-        } else {
-          // Red disc background
-          totalR += 255;
-          totalG += 0;
-          totalB += 0;
-          totalA += 255;
-        }
+      let r = 0, g = 0, b = 0, a = 0;
+
+      if (isMaskable) {
+        // Full bleed background for maskable icon
+        // Diagonal gradient
+        const t = (px + py) / 2.0;
+        const bgR = Math.round(255);
+        const bgG = Math.round(59 + (45 - 59) * t);
+        const bgB = Math.round(48 + (85 - 48) * t);
+        r = bgR;
+        g = bgG;
+        b = bgB;
+        a = 255;
       } else {
-        // Outer OLED True Black background
-        totalR += 0;
-        totalG += 0;
-        totalB += 0;
-        totalA += 255;
+        // Rounded card
+        const dist = sdRoundedRect(
+          px, py,
+          margin, margin,
+          cardSize, cardSize,
+          cornerRadius
+        );
+
+        if (dist <= 0) {
+          // Inside card
+          const t = Math.min(Math.max((px + py - 2 * margin) / (2 * cardSize), 0), 1);
+          r = 255;
+          g = Math.round(59 + (45 - 59) * t);
+          b = Math.round(48 + (85 - 48) * t);
+          a = 255;
+        } else {
+          // Transparent or black outside
+          r = 0;
+          g = 0;
+          b = 0;
+          a = 0;
+        }
       }
+
+      // If inside card / active icon area, check if inside white music note
+      if (a > 0) {
+        // Check music note glyph
+        // Shift slightly if maskable to fit safely within inner 80% circle
+        const scale = isMaskable ? 0.75 : 0.82;
+        const nx = (px - 0.5) / scale + 0.5;
+        const ny = (py - 0.5) / scale + 0.5;
+
+        let inNote = false;
+
+        // Left notehead
+        if (insideNoteHead(nx, ny, 0.355, 0.71, 0.082, 0.058, -0.32)) {
+          inNote = true;
+        }
+        // Right notehead
+        if (insideNoteHead(nx, ny, 0.665, 0.635, 0.082, 0.058, -0.32)) {
+          inNote = true;
+        }
+
+        // Left vertical stem: width ~ 0.045
+        if (nx >= 0.405 && nx <= 0.450 && ny >= 0.30 && ny <= 0.71) {
+          inNote = true;
+        }
+
+        // Right vertical stem: width ~ 0.045
+        if (nx >= 0.715 && nx <= 0.760 && ny >= 0.22 && ny <= 0.635) {
+          inNote = true;
+        }
+
+        // Top beam: connects the two stems with standard downward/upward slope
+        // Between nx 0.405 and 0.760
+        if (nx >= 0.405 && nx <= 0.760) {
+          const u = (nx - 0.405) / (0.760 - 0.405);
+          const topY = 0.26 - 0.08 * u;
+          const beamThickness = 0.095;
+          if (ny >= topY && ny <= topY + beamThickness) {
+            inNote = true;
+          }
+        }
+
+        if (inNote) {
+          r = 255;
+          g = 255;
+          b = 255;
+          a = 255;
+        }
+      }
+
+      totalR += r;
+      totalG += g;
+      totalB += b;
+      totalA += a;
     }
 
     return [
@@ -163,21 +223,34 @@ function renderIcon(size, isMaskable = false) {
   });
 }
 
-console.log('Generating PNG icons...');
-fs.writeFileSync(path.join(outDir, 'pwa-192x192.png'), renderIcon(192));
-fs.writeFileSync(path.join(outDir, 'pwa-512x512.png'), renderIcon(512));
-fs.writeFileSync(path.join(outDir, 'pwa-maskable-512x512.png'), renderIcon(512, true));
-fs.writeFileSync(path.join(outDir, 'apple-touch-icon.png'), renderIcon(180));
+console.log('Generating updated Apple Music style PNG icons...');
+const pwa192 = renderAppleMusicIcon(192);
+const pwa512 = renderAppleMusicIcon(512);
+const pwaMaskable = renderAppleMusicIcon(512, true);
+const appleTouch = renderAppleMusicIcon(180);
 
+fs.writeFileSync(path.join(outDir, 'pwa-192x192.png'), pwa192);
+fs.writeFileSync(path.join(outDir, 'pwa-512x512.png'), pwa512);
+fs.writeFileSync(path.join(outDir, 'pwa-maskable-512x512.png'), pwaMaskable);
+fs.writeFileSync(path.join(outDir, 'apple-touch-icon.png'), appleTouch);
+fs.writeFileSync(path.join(outDir, 'favicon.png'), renderAppleMusicIcon(64));
+fs.writeFileSync(path.join(outDir, 'muslogo.png'), pwa512);
+
+// Also generate SVG for icon.svg with rounded gradient and white double eighth note
 const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="112" fill="#000000"/>
-  <!-- Outer red ring -->
-  <path d="M256 36 C134.5 36 36 134.5 36 256 C36 377.5 134.5 476 256 476 C377.5 476 476 377.5 476 256 C476 134.5 377.5 36 256 36 Z M256 86 C349.9 86 426 162.1 426 256 C426 349.9 349.9 426 256 426 C162.1 426 86 349.9 86 256 C86 162.1 162.1 86 256 86 Z" fill="#FF0000"/>
-  <!-- Inner red disc -->
-  <circle cx="256" cy="256" r="130" fill="#FF0000"/>
-  <!-- Center white play triangle -->
-  <path d="M216 186 C216 180.5 222 177 227 180 L320 250 C324.5 253 324.5 259 320 262 L227 332 C222 335 216 331.5 216 326 Z" fill="#FFFFFF"/>
-</svg>`;
+  <defs>
+    <linearGradient id="appleMusicGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF3B30" />
+      <stop offset="100%" stop-color="#FF2D55" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#appleMusicGrad)" />
+  <g transform="translate(102, 102) scale(12.8)">
+    <path fill="#FFFFFF" d="M19.5 3.5 9.5 5.8C8.7 6 8 6.7 8 7.6V16.7C7.3 16.3 6.4 16 5.5 16 3.6 16 2 17.3 2 19s1.6 3 3.5 3 3.5-1.3 3.5-3V9.6l10-2.3v7.4c-.7-.4-1.6-.7-2.5-.7-1.9 0-3.5 1.3-3.5 3s1.6 3 3.5 3 3.5-1.3 3.5-3V4.5c0-.6-.5-1.1-1-.9z"/>
+  </g>
+</svg>
+`;
+
 fs.writeFileSync(path.join(outDir, 'icon.svg'), svgContent);
 
-console.log('Successfully generated YT Music-styled Cadence app icons in public/');
+console.log('Successfully generated icons and saved to public/ !');

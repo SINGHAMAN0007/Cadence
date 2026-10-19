@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Timer, X, Play, Volume2, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Timer, X, Play, Volume2 } from 'lucide-react';
+import { ModalBackdrop } from './ModalBackdrop';
 import type { SleepTimerState } from '../types';
 
 interface SleepTimerModalProps {
@@ -21,7 +22,16 @@ export const SleepTimerModal: React.FC<SleepTimerModalProps> = ({
 }) => {
   const [selectedMinutes, setSelectedMinutes] = useState<number>(30);
   const [customMinutesInput, setCustomMinutesInput] = useState<string>('');
-  const [fadeOut, setFadeOut] = useState<boolean>(true);
+  const fadeOut = true;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -56,182 +66,183 @@ export const SleepTimerModal: React.FC<SleepTimerModalProps> = ({
     : 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150">
-      <div 
-        className="w-full max-w-md bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-6 text-zinc-100 relative"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-rose-500">
-              <Timer size={20} />
+    <ModalBackdrop
+      isOpen={isOpen}
+      onClose={onClose}
+      className="max-w-sm bg-[#0a0a0a]"
+      aria-labelledby="sleep-timer-title"
+    >
+      {/* Header */}
+        <div className="p-5 sm:p-6 pb-4 border-b border-white/10 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0 pr-3">
+            <div className="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-zinc-300 shrink-0">
+              <Timer size={16} />
             </div>
-            <div>
-              <h2 className="text-base font-semibold text-white tracking-tight">Sleep & Play Timer</h2>
-              <p className="text-xs text-zinc-400">Automatically stop playback and fade audio</p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 id="sleep-timer-title" className="text-white font-semibold text-base tracking-tight leading-tight">
+                  Sleep & Play Timer
+                </h2>
+                {sleepTimer.isActive && (
+                  <span className="text-[10px] font-medium uppercase px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 border border-white/15 leading-none">
+                    Active
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-full transition-colors"
+            className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
             aria-label="Close sleep timer"
           >
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
 
-        {/* Current Active Timer Status */}
-        {sleepTimer.isActive ? (
-          <div className="my-5 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-rose-300 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                Active Sleep Timer
-              </span>
-              <span className="text-xs text-zinc-400 font-mono tabular-nums">
-                {sleepTimer.fadeOutEnabled && sleepTimer.remainingSeconds <= 60 ? (
-                  <span className="text-amber-400 flex items-center gap-1">
-                    <Volume2 size={12} /> Fading out...
-                  </span>
-                ) : (
-                  sleepTimer.fadeOutEnabled ? 'Fade enabled' : 'Instant cut'
-                )}
-              </span>
-            </div>
+        {/* Content Body */}
+        <div className="p-5 sm:p-6 space-y-4">
+          {sleepTimer.isActive ? (
+            /* Active Timer State */
+            <div className="bg-white/[0.03] border border-white/10 rounded-xl p-4.5 flex flex-col gap-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-300 font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                  Playback stopping in
+                </span>
+                <span className="text-zinc-400 font-mono text-[11px] tabular-nums">
+                  {sleepTimer.fadeOutEnabled && sleepTimer.remainingSeconds <= 60 ? (
+                    <span className="text-zinc-200 font-medium flex items-center gap-1">
+                      <Volume2 size={12} className="text-white" /> Fading out
+                    </span>
+                  ) : (
+                    sleepTimer.fadeOutEnabled ? 'Fade enabled' : 'Instant cut'
+                  )}
+                </span>
+              </div>
 
-            <div className="text-3xl font-bold font-mono tracking-tight text-white mb-3 text-center tabular-nums">
-              {formatRemaining(sleepTimer.remainingSeconds)}
-            </div>
+              {/* Remaining Countdown Display */}
+              <div className="text-3xl sm:text-4xl font-bold font-mono tracking-tight text-white py-1 text-center tabular-nums">
+                {formatRemaining(sleepTimer.remainingSeconds)}
+              </div>
 
-            {/* Progress Bar */}
-            <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden mb-4">
-              <div 
-                className="h-full bg-rose-500 transition-all duration-300" 
-                style={{ width: `${progressPercent}%` }} 
-              />
-            </div>
+              {/* Progress Bar */}
+              <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-white rounded-full transition-all duration-300" 
+                  style={{ width: `${progressPercent}%` }} 
+                />
+              </div>
 
-            {/* Quick Actions */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => onExtendTimer(5)}
-                className="flex-1 py-1.5 text-xs font-medium bg-white/[0.08] hover:bg-white/[0.12] text-white rounded-full transition-colors"
-              >
-                +5 min
-              </button>
-              <button
-                onClick={() => onExtendTimer(15)}
-                className="flex-1 py-1.5 text-xs font-medium bg-white/[0.08] hover:bg-white/[0.12] text-white rounded-full transition-colors"
-              >
-                +15 min
-              </button>
-              <button
-                onClick={onCancelTimer}
-                className="py-1.5 px-3.5 text-xs font-medium bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-full transition-colors"
-              >
-                Cancel Timer
-              </button>
+              {/* Quick Actions */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onExtendTimer(5)}
+                  className="flex-1 py-2 text-xs font-medium bg-white/5 hover:bg-white/10 text-zinc-200 border border-white/10 rounded-xl transition-colors cursor-pointer text-center"
+                >
+                  +5 min
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onExtendTimer(15)}
+                  className="flex-1 py-2 text-xs font-medium bg-white/5 hover:bg-white/10 text-zinc-200 border border-white/10 rounded-xl transition-colors cursor-pointer text-center"
+                >
+                  +15 min
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelTimer}
+                  className="py-2 px-3.5 text-xs font-medium bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10 hover:border-white/20 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel Timer
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="my-5 space-y-4">
-            {/* Presets Grid */}
-            <div>
-              <label className="text-xs font-medium text-zinc-400 block mb-2">Preset Durations</label>
+          ) : (
+            /* Setup State */
+            <div className="space-y-3.5">
+              {/* Presets Grid without label */}
               <div className="grid grid-cols-4 gap-2">
                 {presets.map((mins) => (
                   <button
                     key={mins}
                     type="button"
-                    onClick={() => setSelectedMinutes(mins)}
-                    className={`py-2 px-3 rounded-full text-xs font-medium transition-all ${
-                      selectedMinutes === mins
-                        ? 'bg-rose-500 text-white shadow-md ring-1 ring-white/20'
-                        : 'bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 border border-white/10'
+                    onClick={() => {
+                      setSelectedMinutes(mins);
+                      setCustomMinutesInput('');
+                    }}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-medium transition-all cursor-pointer text-center ${
+                      selectedMinutes === mins && !customMinutesInput
+                        ? 'bg-white text-black font-semibold shadow-sm'
+                        : 'bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/10'
                     }`}
                   >
                     {mins}m
                   </button>
                 ))}
               </div>
-            </div>
 
-            {/* Custom Minutes */}
-            <div>
-              <label className="text-xs font-medium text-zinc-400 block mb-2">Or Custom Duration (minutes)</label>
+              {/* Compact Custom Minutes Input without label */}
               <form onSubmit={handleCustomSubmit} className="flex gap-2">
                 <input
                   type="number"
                   min="1"
                   max="480"
                   value={customMinutesInput}
-                  onChange={(e) => setCustomMinutesInput(e.target.value)}
-                  placeholder="e.g. 20, 90..."
-                  className="flex-1 bg-white/[0.06] border border-white/10 rounded-full px-3.5 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+                  onChange={(e) => {
+                    setCustomMinutesInput(e.target.value);
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val > 0) {
+                      setSelectedMinutes(val);
+                    }
+                  }}
+                  placeholder="Custom minutes (e.g. 25)..."
+                  className="flex-1 bg-white/[0.04] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-white/30"
                 />
                 <button
                   type="submit"
                   disabled={!customMinutesInput}
-                  className="px-4 py-1.5 bg-white/10 hover:bg-white/15 disabled:opacity-40 text-white text-xs font-medium rounded-full border border-white/10 transition-colors"
+                  className="py-2.5 px-4 bg-white/5 hover:bg-white/10 disabled:opacity-40 text-zinc-200 text-xs font-medium rounded-xl border border-white/10 transition-colors cursor-pointer shrink-0"
                 >
                   Set Custom
                 </button>
               </form>
             </div>
-
-            {/* Fade Out Toggle */}
-            <div className="p-3 bg-white/[0.04] rounded-xl border border-white/10 flex items-center justify-between">
-              <div className="flex items-start gap-2.5">
-                <Volume2 size={16} className="text-rose-400 mt-0.5 shrink-0" />
-                <div>
-                  <div className="text-xs font-medium text-zinc-200">Fade out audio</div>
-                  <div className="text-[11px] text-zinc-400">Gradually lower volume over the final 60 seconds</div>
-                </div>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={fadeOut}
-                  onChange={(e) => setFadeOut(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-10 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
-              </label>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Modal Footer */}
-        {!sleepTimer.isActive ? (
-          <div className="pt-2 flex items-center justify-end gap-2.5">
+        <div className="p-5 sm:p-6 pt-3 flex items-center gap-3 border-t border-white/5">
+          {!sleepTimer.isActive ? (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 h-10 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-zinc-300 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStartPreset(selectedMinutes)}
+                className="flex-1 h-10 px-4 rounded-xl bg-white hover:bg-zinc-200 text-black text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <Play size={14} className="w-3.5 h-3.5 fill-current shrink-0" />
+                <span>Start</span>
+              </button>
+            </>
+          ) : (
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-zinc-400 hover:text-white hover:bg-white/10 rounded-full transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStartPreset(selectedMinutes)}
-              className="px-5 py-2 text-xs font-medium text-white bg-rose-500 hover:bg-rose-400 rounded-full shadow-md shadow-rose-500/30 transition-colors flex items-center gap-1.5"
-            >
-              <Play size={13} fill="currentColor" /> Start {selectedMinutes}m Timer
-            </button>
-          </div>
-        ) : (
-          <div className="pt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-zinc-300 hover:text-white bg-white/10 hover:bg-white/15 rounded-full transition-colors"
+              className="w-full h-10 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-zinc-300 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
             >
               Keep Running & Close
             </button>
-          </div>
-        )}
-      </div>
-    </div>
+          )}
+        </div>
+    </ModalBackdrop>
   );
 };

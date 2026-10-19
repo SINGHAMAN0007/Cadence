@@ -55,6 +55,17 @@ app.post('/api/identify-song', async (req, res) => {
             if (ytMedia?.url) ytUrl = ytMedia.url;
           }
 
+          let spotifyUrl: string | null = null;
+          if (r.spotify?.external_urls?.spotify) {
+            spotifyUrl = r.spotify.external_urls.spotify;
+          } else if (r.spotify?.link) {
+            spotifyUrl = r.spotify.link;
+          } else if (r.spotify?.id) {
+            spotifyUrl = `https://open.spotify.com/track/${r.spotify.id}`;
+          } else {
+            spotifyUrl = `https://open.spotify.com/search/${encodeURIComponent(r.title + ' ' + r.artist)}`;
+          }
+
           return res.json({
             status: 'success',
             result: {
@@ -64,6 +75,7 @@ app.post('/api/identify-song', async (req, res) => {
               release_date: r.release_date,
               artwork_url: r.spotify?.album?.images?.[0]?.url || r.apple_music?.artwork?.url || null,
               youtube_url: ytUrl,
+              spotify_url: spotifyUrl,
             },
           });
         }
@@ -101,6 +113,7 @@ If no recognizable song or melody is present, set title to "" and artist to "" a
         const title = parsed.title.trim();
         const artist = (parsed.artist || 'Unknown Artist').trim();
         const ytMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(title + ' ' + artist)}`;
+        const spotifyUrl = `https://open.spotify.com/search/${encodeURIComponent(title + ' ' + artist)}`;
         return res.json({
           status: 'success',
           result: {
@@ -109,6 +122,7 @@ If no recognizable song or melody is present, set title to "" and artist to "" a
             album: parsed.genre || 'Single',
             artwork_url: null,
             youtube_url: ytMusicUrl,
+            spotify_url: spotifyUrl,
           },
         });
       }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, FolderPlus, Palette } from 'lucide-react';
+import { X, FolderPlus, Palette, Trash2 } from 'lucide-react';
+import { ModalBackdrop } from './ModalBackdrop';
 import type { Playlist } from '../types';
 
 interface PlaylistModalProps {
@@ -7,6 +8,7 @@ interface PlaylistModalProps {
   onClose: () => void;
   playlistToEdit?: Playlist | null;
   onSave: (name: string, description: string, coverColor: string) => void;
+  onDelete?: (playlistId: number) => void;
 }
 
 const PRESET_COLORS = [
@@ -25,6 +27,7 @@ export const PlaylistModal: React.FC<PlaylistModalProps> = ({
   onClose,
   playlistToEdit,
   onSave,
+  onDelete,
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -52,12 +55,12 @@ export const PlaylistModal: React.FC<PlaylistModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150">
-      <div 
-        className="w-full max-w-md bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-6 text-zinc-100"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between pb-4 border-b border-white/10">
+    <ModalBackdrop
+      isOpen={isOpen}
+      onClose={onClose}
+      className="max-w-md bg-[#0a0a0a] p-6 text-zinc-100"
+    >
+      <div className="flex items-center justify-between pb-4 border-b border-white/10">
           <div className="flex items-center gap-3">
             <div 
               className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg ring-1 ring-white/10"
@@ -130,24 +133,39 @@ export const PlaylistModal: React.FC<PlaylistModalProps> = ({
             </div>
           </div>
 
-          <div className="pt-4 border-t border-white/10 flex items-center justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-zinc-400 hover:text-white hover:bg-white/10 rounded-full transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!name.trim()}
-              className="px-5 py-2 text-xs font-medium text-white bg-rose-500 hover:bg-rose-400 disabled:opacity-40 rounded-full shadow-md shadow-rose-500/30 transition-colors"
-            >
-              {playlistToEdit ? 'Save Changes' : 'Create Playlist'}
-            </button>
+          <div className="pt-4 border-t border-white/10 flex items-center justify-between gap-2.5">
+            {playlistToEdit && onDelete ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onDelete(playlistToEdit.id);
+                  onClose();
+                }}
+                className="px-3.5 py-2 text-xs font-medium text-rose-400 hover:text-white bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-full transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 size={13} />
+                <span>Delete Playlist</span>
+              </button>
+            ) : <div />}
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-medium text-zinc-400 hover:text-white hover:bg-white/10 rounded-full transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!name.trim()}
+                className="px-5 py-2 text-xs font-medium text-white bg-rose-500 hover:bg-rose-400 disabled:opacity-40 rounded-full shadow-md shadow-rose-500/30 transition-colors"
+              >
+                {playlistToEdit ? 'Save Changes' : 'Create Playlist'}
+              </button>
+            </div>
           </div>
         </form>
-      </div>
-    </div>
+    </ModalBackdrop>
   );
 };

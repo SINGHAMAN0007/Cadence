@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, X } from 'lucide-react';
+import { ModalBackdrop } from './ModalBackdrop';
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -23,12 +24,12 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150">
-      <div
-        className="w-full max-w-sm bg-[#0a0a0a] backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-5 text-zinc-100"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start gap-3.5 mb-4">
+    <ModalBackdrop
+      isOpen={isOpen}
+      onClose={onClose}
+      className="max-w-sm bg-[#0a0a0a] p-5 text-zinc-100"
+    >
+      <div className="flex items-start gap-3.5 mb-4">
           <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 shrink-0">
             <AlertTriangle size={20} />
           </div>
@@ -67,7 +68,6 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             {confirmLabel}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalBackdrop>
   );
 };

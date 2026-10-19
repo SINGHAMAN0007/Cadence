@@ -2,14 +2,16 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { 
   Play, Pause, Music, Search, Plus, Trash2, Clock, 
   Sparkles, UploadCloud, AlertCircle, CheckCircle2, 
-  Heart, FolderPlus, Disc3, Shuffle, ListFilter, ArrowUpDown
+  FolderPlus, Disc3, Shuffle, ListFilter, ArrowUpDown
 } from 'lucide-react';
 import { db } from './services/db';
 import { parseAudioMetadata } from './services/metadata';
+import { sanitizeMetadata } from './utils/sanitizeMetadata';
 import { createDemoSynthwaveTrack, createDemoChillAmbientTrack, createDemoCosmicPulseTrack } from './services/demoTracks';
 import type { 
   Track, Playlist, RepeatMode, 
-  SortField, SortOrder, SleepTimerState 
+  SortField, SortOrder, SleepTimerState,
+  MusicCategory
 } from './types';
 
 import { Sidebar } from './components/Sidebar';
@@ -48,13 +50,55 @@ import {
   type PlaybackSessionData
 } from './services/firebase';
 import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
+import { useAudioVisualizer } from './hooks/useAudioVisualizer';
+
+// Utility to normalize and strictly deduplicate favorite IDs as positive numbers
+function normalizeFavoriteIds(raw: any): number[] {
+  if (!Array.isArray(raw)) return [];
+  const set = new Set<number>();
+  for (const item of raw) {
+    const num = Number(item);
+    if (!isNaN(num) && num > 0) {
+      set.add(num);
+    }
+  }
+  return Array.from(set);
+}
 
 export default function App() {
   // --- Data State ---
   const [library, setLibrary] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [currentView, setCurrentView] = useState<'library' | 'favorites' | 'recent' | { playlistId: number }>('library');
+  const [currentView, setCurrentView] = useState<'library' | 'favorites' | { playlistId: number }>('library');
   
+  // --- Reactive Favorites State ---
+  const [favoriteIds, setFavoriteIds] = useState<number[]>(() => {
+    try {
+      const raw = localStorage.getItem('cadence_favorites') || localStorage.getItem('cadence_favorite_ids');
+      if (raw) {
+        return normalizeFavoriteIds(JSON.parse(raw));
+      }
+    } catch (e) {
+      // ignore
+    }
+    return [];
+  });
+
+  // Sync favorites across components if updated elsewhere
+  useEffect(() => {
+    const handleSyncFavorites = () => {
+      try {
+        const stored = localStorage.getItem('cadence_favorites') || localStorage.getItem('cadence_favorite_ids');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setFavoriteIds(normalizeFavoriteIds(parsed));
+        }
+      } catch {}
+    };
+    window.addEventListener('cadence_favorites_updated', handleSyncFavorites);
+    return () => window.removeEventListener('cadence_favorites_updated', handleSyncFavorites);
+  }, []);
+
   // --- Playback State ---
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -139,21 +183,30 @@ export default function App() {
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [isLoadingDemo, setIsLoadingDemo] = useState<boolean>(false);
-  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [toastMessage, setToastMessage] = useState<{
+    text: string;
+    type?: 'success' | 'error' | 'info';
+    action?: { label: string; onClick: () => void };
+  } | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // --- Audio & Web Audio Refs ---
+  // --- Audio & Web Audio Pipeline ---
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentBlobUrlRef = useRef<string | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const [analyserNodeState, setAnalyserNodeState] = useState<AnalyserNode | null>(null);
+  const { analyser: analyserNodeState, setupAnalyser: setupWebAudioAnalyser } = useAudioVisualizer(audioRef, isPlaying);
 
-  const showToast = useCallback((text: string, type: 'success' | 'error' | 'info' = 'info') => {
-    setToastMessage({ text, type });
-    setTimeout(() => {
-      setToastMessage(prev => prev?.text === text ? null : prev);
-    }, 4000);
+  const showToast = useCallback((
+    text: string, 
+    type: 'success' | 'error' | 'info' = 'info',
+    action?: { label: string; onClick: () => void }
+  ) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage({ text, type, action });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 2500); // Auto-dismiss cleanly after 2.5 seconds
   }, []);
 
   // Request persistent local storage on boot to prevent Android or Windows from clearing cached music files
@@ -169,64 +222,61 @@ export default function App() {
     }
   }, []);
 
-  // --- Initialize Audio Element & Listeners ---
+  // --- Audio Event Listeners & State Synchronization ---
+  const handleTimeUpdate = useCallback(() => {
+    if (audioRef.current) {
+      setCurrentTime(audioRef.current.currentTime);
+    }
+  }, []);
+
+  const handleLoadedMetadata = useCallback(() => {
+    if (audioRef.current) {
+      setDuration(audioRef.current.duration || 0);
+    }
+  }, []);
+
+  // Strictly synchronize navigator.mediaSession.playbackState with audio events
+  const handlePlayEvent = useCallback(() => {
+    setIsPlaying(true);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+    }
+  }, []);
+
+  const handlePauseEvent = useCallback(() => {
+    setIsPlaying(false);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
+    }
+  }, []);
+
+  const handleAudioError = useCallback(() => {
+    console.warn('Audio playback error on track');
+    setIsPlaying(false);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
+    }
+    showToast('Could not play track (unsupported format or corrupted audio)', 'error');
+  }, [showToast]);
+
+  const handleTrackEndedRef = useRef<() => void>(() => {});
+
+  // Fallback native listener to ensure audioRef.current dispatches to latest handleTrackEnded
   useEffect(() => {
-    const audio = new Audio();
-    audioRef.current = audio;
+    const audio = audioRef.current;
+    if (!audio) return;
 
-    const handleTimeUpdate = () => {
-      setCurrentTime(audio.currentTime);
-    };
-
-    const handleLoadedMetadata = () => {
-      setDuration(audio.duration || 0);
-    };
-
-    // Strictly synchronize navigator.mediaSession.playbackState with audio events
-    const handlePlayEvent = () => {
-      setIsPlaying(true);
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'playing';
-      }
-    };
-
-    const handlePauseEvent = () => {
-      setIsPlaying(false);
+    const onNativeEnded = () => {
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused';
       }
+      handleTrackEndedRef.current();
     };
 
-    const handleEnded = () => {
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
-      }
-      handleTrackEnded();
-    };
-
-    const handleError = () => {
-      console.warn('Audio playback error on track');
-      setIsPlaying(false);
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
-      }
-      showToast('Could not play track (unsupported format or corrupted audio)', 'error');
-    };
-
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('play', handlePlayEvent);
-    audio.addEventListener('pause', handlePauseEvent);
-    audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('error', handleError);
+    audio.addEventListener('ended', onNativeEnded);
 
     return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('play', handlePlayEvent);
-      audio.removeEventListener('pause', handlePauseEvent);
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('error', handleError);
+      audio.removeEventListener('ended', onNativeEnded);
       if (currentBlobUrlRef.current) {
         URL.revokeObjectURL(currentBlobUrlRef.current);
         currentBlobUrlRef.current = null;
@@ -234,53 +284,61 @@ export default function App() {
     };
   }, []);
 
-  // Connect Web Audio Analyser safely (with Android error resilience)
-  const setupWebAudioAnalyser = useCallback(() => {
-    if (!audioRef.current) return;
-    try {
-      if (!audioCtxRef.current) {
-        const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        if (AudioContextClass) {
-          const ctx = new AudioContextClass();
-          audioCtxRef.current = ctx;
-
-          try {
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 256;
-            analyser.smoothingTimeConstant = 0.8;
-            analyserRef.current = analyser;
-
-            const source = ctx.createMediaElementSource(audioRef.current);
-            source.connect(analyser);
-            analyser.connect(ctx.destination);
-            sourceNodeRef.current = source;
-            setAnalyserNodeState(analyser);
-          } catch (sourceErr) {
-            console.warn('MediaElementSource note:', sourceErr);
-          }
-        }
-      }
-
-      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-        audioCtxRef.current.resume();
-      }
-    } catch (err) {
-      console.warn('Web Audio Analyser setup note:', err);
-    }
-  }, []);
-
   // --- Load Initial Data from IndexedDB ---
   const loadDatabase = useCallback(async () => {
     try {
       const rawTracks = await db.tracks.toArray();
-      // Normalize tracks to ensure blob and addedAt are hydrated
-      const tracks: Track[] = rawTracks.map(t => ({
-        ...t,
-        blob: t.blob || (t.file as Blob),
-        file: t.blob || t.file,
-        addedAt: t.addedAt || t.createdAt || Date.now(),
-        createdAt: t.addedAt || t.createdAt || Date.now(),
-      }));
+      // Read localStorage favorites cache if present
+      let storedFavIds: (string | number)[] = [];
+      const hasStoredFavorites = localStorage.getItem('cadence_favorites') !== null || localStorage.getItem('cadence_favorite_ids') !== null;
+      try {
+        const stored = localStorage.getItem('cadence_favorites') || localStorage.getItem('cadence_favorite_ids');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) storedFavIds = parsed;
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      // Normalize tracks to ensure blob, addedAt, and isFavorite are hydrated, and sanitize metadata
+      const tracks: Track[] = rawTracks.map(t => {
+        const isFav = hasStoredFavorites 
+          ? storedFavIds.some(id => String(id) === String(t.id))
+          : !!t.isFavorite;
+        const sanitized = sanitizeMetadata(t.title, t.artist, t.album);
+        return {
+          ...t,
+          title: sanitized.title,
+          artist: sanitized.artist,
+          album: sanitized.album,
+          blob: t.blob || (t.file as Blob),
+          file: t.blob || t.file,
+          addedAt: t.addedAt || t.createdAt || Date.now(),
+          createdAt: t.addedAt || t.createdAt || Date.now(),
+          isFavorite: isFav,
+        };
+      });
+
+      // Background migration for legacy records with raw downloader watermarks
+      rawTracks.forEach(t => {
+        const s = sanitizeMetadata(t.title, t.artist, t.album);
+        if (s.title !== t.title || s.artist !== t.artist || s.album !== (t.album || 'Single')) {
+          db.tracks.update(t.id, { title: s.title, artist: s.artist, album: s.album }).catch(() => {});
+        }
+      });
+
+      // Keep favoriteIds reactive state and localStorage in sync
+      const allFavIds = hasStoredFavorites ? storedFavIds : tracks.filter(t => t.isFavorite).map(t => t.id);
+      const normalizedFavIds = normalizeFavoriteIds(allFavIds);
+      setFavoriteIds(normalizedFavIds);
+      try {
+        localStorage.setItem('cadence_favorites', JSON.stringify(normalizedFavIds));
+        localStorage.setItem('cadence_favorite_ids', JSON.stringify(normalizedFavIds));
+      } catch (e) {
+        // ignore
+      }
+
       const loadedPlaylists = await db.playlists.toArray();
       setLibrary(tracks);
       setPlaylists(loadedPlaylists);
@@ -293,6 +351,32 @@ export default function App() {
   useEffect(() => {
     loadDatabase();
   }, [loadDatabase]);
+
+  // Push current local metadata (favorites & playlists) to Firebase Cloud
+  const pushLocalMetadataToCloud = useCallback(async (userToSync?: FirebaseUser | null) => {
+    const user = userToSync ?? currentUser;
+    if (!user) return;
+    try {
+      const allLocalTracks = await db.tracks.toArray();
+      const allLocalPlaylists = await db.playlists.toArray();
+      const favKeys = allLocalTracks.filter(t => t.isFavorite).map(t => `${t.title}:::${t.artist}`);
+      const plMetadata = allLocalPlaylists.map(p => ({
+        id: p.id,
+        name: p.name || 'Playlist',
+        description: p.description || '',
+        createdAt: p.createdAt || Date.now(),
+        coverColor: p.coverColor || '#8b5cf6',
+        trackTitles: (p.trackIds || []).map(id => allLocalTracks.find(t => t.id === id)?.title).filter(Boolean) as string[],
+      }));
+
+      await syncUserMetadataToCloud({
+        favoriteTrackKeys: favKeys,
+        playlistMetadata: plMetadata,
+      });
+    } catch (err) {
+      console.warn('Metadata push note:', err);
+    }
+  }, [currentUser]);
 
   // Cloud Metadata Synchronization (Favorites & Playlists)
   const syncLocalMetadataWithCloud = useCallback(async (userToSync?: FirebaseUser | null) => {
@@ -312,12 +396,21 @@ export default function App() {
             }
           }
         }
+
+        // Avoid resurrecting playlists explicitly deleted by the user
+        let deletedNames: string[] = [];
+        try {
+          deletedNames = JSON.parse(localStorage.getItem('cadence_deleted_playlist_names') || '[]');
+        } catch (e) {
+          deletedNames = [];
+        }
+
         if (cloud.playlistMetadata && cloud.playlistMetadata.length > 0) {
           const currentPlaylists = await db.playlists.toArray();
           const existingNames = new Set(currentPlaylists.map(p => p.name));
           const allTracks = await db.tracks.toArray();
           for (const pl of cloud.playlistMetadata) {
-            if (!existingNames.has(pl.name)) {
+            if (!existingNames.has(pl.name) && !deletedNames.includes(pl.name)) {
               const matchedIds = allTracks
                 .filter(t => pl.trackTitles?.includes(t.title))
                 .map(t => t.id);
@@ -326,6 +419,7 @@ export default function App() {
                 description: pl.description || '',
                 createdAt: pl.createdAt || Date.now(),
                 trackIds: matchedIds,
+                coverColor: pl.coverColor || '#8b5cf6',
               } as Playlist);
               changed = true;
             }
@@ -336,26 +430,12 @@ export default function App() {
         }
       }
 
-      // Push local metadata back to cloud for backup
-      const allLocalTracks = await db.tracks.toArray();
-      const allLocalPlaylists = await db.playlists.toArray();
-      const favKeys = allLocalTracks.filter(t => t.isFavorite).map(t => `${t.title}:::${t.artist}`);
-      const plMetadata = allLocalPlaylists.map(p => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        createdAt: p.createdAt,
-        trackTitles: p.trackIds.map(id => allLocalTracks.find(t => t.id === id)?.title).filter(Boolean) as string[],
-      }));
-
-      await syncUserMetadataToCloud({
-        favoriteTrackKeys: favKeys,
-        playlistMetadata: plMetadata,
-      });
+      // Push latest local metadata to cloud
+      await pushLocalMetadataToCloud(user);
     } catch (err) {
       console.warn('Metadata sync note:', err);
     }
-  }, [currentUser, loadDatabase]);
+  }, [currentUser, loadDatabase, pushLocalMetadataToCloud]);
 
   // Firebase Auth persistence & connectivity verification
   useEffect(() => {
@@ -384,25 +464,41 @@ export default function App() {
 
     try {
       const audioBlob = track.blob || track.file;
-      if (!audioBlob || audioBlob.size === 0) {
+      const audioUrl = (track as any).audioUrl;
+
+      if ((!audioBlob || audioBlob.size === 0) && !audioUrl) {
         if (track.lyrics && track.lyrics.includes('music.youtube.com')) {
           const match = track.lyrics.match(/https:\/\/music\.youtube\.com[^\s\n]+/);
           if (match) {
             window.open(match[0], '_blank');
-            showToast(`Opening "${track.title}" in YouTube Music...`, 'info');
+            showToast('Opening YouTube Music', 'info');
             return;
           }
         }
-        showToast(`"${track.title}" is saved in Wishlist (bookmark).`, 'info');
+        showToast('Saved in Wishlist', 'info');
         return;
       }
 
-      const url = URL.createObjectURL(audioBlob);
-      currentBlobUrlRef.current = url;
-      audio.src = url;
-      audio.playbackRate = playbackRate;
-      audio.volume = isMuted ? 0 : userVolume;
+      const url = audioUrl || URL.createObjectURL(audioBlob);
+      if (!audioUrl) {
+        currentBlobUrlRef.current = url;
+      }
 
+      // 1. Immediately reset playback time and scrubbers to 0:00
+      audio.src = url;
+      audio.currentTime = 0;
+      setCurrentTime(0);
+      audio.playbackRate = playbackRate;
+      audio.volume = isMuted ? 0 : Math.pow(userVolume, 2);
+
+      // 2. Immediately sync UI metadata (title, artist, cover) & keep playing state
+      setCurrentTrack(track);
+      setIsPlaying(true);
+      if (newQueue !== undefined) {
+        setQueue(newQueue);
+      }
+
+      // 3. Initiate audio playback reliably on track transition
       audio.play().then(() => {
         setIsPlaying(true);
         if ('mediaSession' in navigator) {
@@ -410,7 +506,7 @@ export default function App() {
         }
       }).catch(err => {
         if (err.name !== 'AbortError') {
-          console.warn('Play aborted or blocked by browser policy:', err);
+          console.warn('Auto-play blocked or interrupted:', err);
           setIsPlaying(false);
           if ('mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'paused';
@@ -420,11 +516,6 @@ export default function App() {
 
       if (currentTrack && currentTrack.id !== track.id) {
         setHistory(prev => [currentTrack, ...prev.filter(t => t.id !== currentTrack.id)].slice(0, 50));
-      }
-
-      setCurrentTrack(track);
-      if (newQueue !== undefined) {
-        setQueue(newQueue);
       }
 
       // Broadcast to Listen Together session if hosting
@@ -510,28 +601,45 @@ export default function App() {
     }
   }, [currentTrack, library, isPlaying, playTrack, setupWebAudioAnalyser, isHost, activeSession]);
 
-  // --- Volume Changes ---
-  const handleVolumeChange = useCallback((newVol: number) => {
-    setUserVolume(newVol);
+  const prevVolumeRef = useRef<number>(userVolume || 0.7);
+
+  // --- Volume Changes with Logarithmic / Perceptual Scaling ---
+  const handleVolumeChange = useCallback((rawLevel: number) => {
+    const clamped = Math.max(0, Math.min(1, rawLevel));
+    setUserVolume(clamped);
+    if (clamped > 0) {
+      prevVolumeRef.current = clamped;
+    }
     try {
-      localStorage.setItem('cadence_volume', newVol.toString());
+      localStorage.setItem('cadence_volume', clamped.toString());
     } catch {}
     if (audioRef.current && !isMuted) {
-      audioRef.current.volume = newVol;
+      // Squared curve for natural auditory scaling (human hearing is logarithmic)
+      audioRef.current.volume = Math.pow(clamped, 2);
     }
-    if (newVol > 0 && isMuted) {
+    if (clamped > 0 && isMuted) {
       setIsMuted(false);
     }
   }, [isMuted]);
 
+  // --- Mute Memory & Toggle ---
   const toggleMute = useCallback(() => {
-    if (!audioRef.current) return;
     if (isMuted) {
-      audioRef.current.volume = userVolume;
       setIsMuted(false);
+      const restored = prevVolumeRef.current > 0 ? prevVolumeRef.current : 0.7;
+      setUserVolume(restored);
+      if (audioRef.current) {
+        audioRef.current.volume = Math.pow(restored, 2);
+      }
+      try {
+        localStorage.setItem('cadence_volume', restored.toString());
+      } catch {}
     } else {
-      audioRef.current.volume = 0;
+      prevVolumeRef.current = userVolume > 0 ? userVolume : 0.7;
       setIsMuted(true);
+      if (audioRef.current) {
+        audioRef.current.volume = 0;
+      }
     }
   }, [isMuted, userVolume]);
 
@@ -698,9 +806,15 @@ export default function App() {
     if (currentView === 'library') {
       list = [...library];
     } else if (currentView === 'favorites') {
-      list = library.filter(t => t.isFavorite);
-    } else if (currentView === 'recent') {
-      list = [...library].sort((a, b) => b.createdAt - a.createdAt);
+      const seenKeys = new Set<string>();
+      list = library.filter(t => {
+        const isFav = favoriteIds.some(id => Number(id) === Number(t.id));
+        if (!isFav) return false;
+        const key = `${t.title.trim().toLowerCase()}:::${(t.artist || '').trim().toLowerCase()}`;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        return true;
+      });
     } else if (typeof currentView === 'object') {
       const pl = playlists.find(p => p.id === currentView.playlistId);
       if (pl) {
@@ -744,7 +858,7 @@ export default function App() {
     }
 
     return list;
-  }, [library, playlists, currentView, searchQuery, sortField, sortOrder, selectedCategory, selectedGenre]);
+  }, [library, playlists, currentView, searchQuery, sortField, sortOrder, selectedCategory, selectedGenre, favoriteIds]);
 
   // Aggregate category and genre counts for dynamic filter chips
   const categoryCounts = useMemo(() => {
@@ -770,18 +884,18 @@ export default function App() {
     return counts;
   }, [library, selectedCategory]);
 
-  // --- Next & Previous Navigation ---
-  const handleNext = useCallback(() => {
-    if (!currentTrack) return;
-
+  // --- Queue Navigation & Auto-Play Handler ---
+  const handleTrackEnded = useCallback(() => {
+    // 1. Single-track repeat mode check
     if (repeatMode === 'one' && audioRef.current) {
       audioRef.current.currentTime = 0;
-      audioRef.current.play();
+      setCurrentTime(0);
+      audioRef.current.play().catch(console.error);
       setIsPlaying(true);
       return;
     }
 
-    // 1. Check if queue has songs
+    // Check if manual queue has upcoming tracks
     if (queue.length > 0) {
       const nextSong = queue[0];
       const remainingQueue = queue.slice(1);
@@ -789,31 +903,76 @@ export default function App() {
       return;
     }
 
-    // 2. Play next in current visible track list
-    if (visibleTracks.length > 0) {
-      const currentIndex = visibleTracks.findIndex(t => t.id === currentTrack.id);
-      if (currentIndex !== -1) {
-        if (isShuffle) {
-          const others = visibleTracks.filter(t => t.id !== currentTrack.id);
-          if (others.length > 0) {
-            const randomTrack = others[Math.floor(Math.random() * others.length)];
-            playTrack(randomTrack);
-            return;
-          }
-        }
+    // 2. Locate active index in the current queue / playlist
+    const currentQueue = visibleTracks.length > 0 ? visibleTracks : library;
+    if (currentQueue.length === 0) {
+      setIsPlaying(false);
+      return;
+    }
 
-        if (currentIndex < visibleTracks.length - 1) {
-          playTrack(visibleTracks[currentIndex + 1]);
-          return;
-        } else if (repeatMode === 'all') {
-          playTrack(visibleTracks[0]);
-          return;
-        }
+    const currentIndex = currentQueue.findIndex((t) => String(t.id) === String(currentTrack?.id));
+    if (currentIndex === -1) {
+      playTrack(currentQueue[0]);
+      return;
+    }
+
+    // 3. Shuffle logic
+    if (isShuffle) {
+      let randomIndex = Math.floor(Math.random() * currentQueue.length);
+      if (currentQueue.length > 1 && randomIndex === currentIndex) {
+        randomIndex = (randomIndex + 1) % currentQueue.length;
+      }
+      playTrack(currentQueue[randomIndex]);
+      return;
+    }
+
+    // 4. Sequential next track
+    const nextIndex = currentIndex + 1;
+    if (nextIndex < currentQueue.length) {
+      // Play next track in sequence
+      playTrack(currentQueue[nextIndex]);
+    } else if (repeatMode === 'all') {
+      // Loop back to start if loop queue is enabled
+      playTrack(currentQueue[0]);
+    } else {
+      // Reached the end of the queue
+      setIsPlaying(false);
+    }
+  }, [repeatMode, queue, visibleTracks, library, currentTrack, isShuffle, playTrack]);
+
+  // Keep ref synchronized so any native audio listeners always call the latest handler
+  useEffect(() => {
+    handleTrackEndedRef.current = handleTrackEnded;
+  }, [handleTrackEnded]);
+
+  const handleNext = useCallback(() => {
+    if (!currentTrack) {
+      const currentQueue = visibleTracks.length > 0 ? visibleTracks : library;
+      if (currentQueue.length > 0) {
+        playTrack(currentQueue[0]);
+      }
+      return;
+    }
+
+    // When manual next button is pressed during repeat 'one', advance to next track
+    if (repeatMode === 'one') {
+      if (queue.length > 0) {
+        const nextSong = queue[0];
+        const remainingQueue = queue.slice(1);
+        playTrack(nextSong, remainingQueue);
+        return;
+      }
+      const currentQueue = visibleTracks.length > 0 ? visibleTracks : library;
+      if (currentQueue.length > 0) {
+        const currentIndex = currentQueue.findIndex((t) => String(t.id) === String(currentTrack?.id));
+        const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % currentQueue.length : 0;
+        playTrack(currentQueue[nextIndex]);
+        return;
       }
     }
 
-    setIsPlaying(false);
-  }, [currentTrack, repeatMode, queue, visibleTracks, isShuffle, playTrack]);
+    handleTrackEnded();
+  }, [currentTrack, library, repeatMode, queue, visibleTracks, playTrack, handleTrackEnded]);
 
   const handlePrev = useCallback(() => {
     if (!currentTrack || !audioRef.current) return;
@@ -826,22 +985,19 @@ export default function App() {
     }
 
     // Go to previous track in list
-    if (visibleTracks.length > 0) {
-      const currentIndex = visibleTracks.findIndex(t => t.id === currentTrack.id);
+    const currentQueue = visibleTracks.length > 0 ? visibleTracks : library;
+    if (currentQueue.length > 0) {
+      const currentIndex = currentQueue.findIndex((t) => String(t.id) === String(currentTrack.id));
       if (currentIndex > 0) {
-        playTrack(visibleTracks[currentIndex - 1]);
+        playTrack(currentQueue[currentIndex - 1]);
       } else if (repeatMode === 'all') {
-        playTrack(visibleTracks[visibleTracks.length - 1]);
+        playTrack(currentQueue[currentQueue.length - 1]);
       } else {
         audioRef.current.currentTime = 0;
         setCurrentTime(0);
       }
     }
-  }, [currentTrack, visibleTracks, repeatMode, playTrack]);
-
-  const handleTrackEnded = useCallback(() => {
-    handleNext();
-  }, [handleNext]);
+  }, [currentTrack, visibleTracks, library, repeatMode, playTrack]);
 
   // Sync Bluetooth Earbuds & Headphone MediaSession Action Handlers and State
   useEffect(() => {
@@ -1063,14 +1219,15 @@ export default function App() {
           storageBlob = file;
         }
 
-        const initialGuess = classifyTrackWithHeuristics(meta.title, meta.artist);
+        const sanitized = sanitizeMetadata(meta.title, meta.artist, meta.album);
+        const initialGuess = classifyTrackWithHeuristics(sanitized.title, sanitized.artist);
 
         collected.push({
           file: storageBlob,
           meta: {
-            title: meta.title,
-            artist: meta.artist,
-            album: meta.album,
+            title: sanitized.title,
+            artist: sanitized.artist,
+            album: sanitized.album,
             duration: meta.duration,
             format: meta.format || file.type || 'audio/mpeg',
             size: file.size,
@@ -1107,10 +1264,11 @@ export default function App() {
     for (let i = 0; i < taggedTracks.length; i++) {
       const item = taggedTracks[i];
       const now = nowBase + i;
+      const sanitized = sanitizeMetadata(item.meta.title, item.meta.artist, item.meta.album);
       const newTrack: Omit<Track, 'id'> = {
-        title: item.meta.title,
-        artist: item.meta.artist,
-        album: item.meta.album,
+        title: sanitized.title,
+        artist: sanitized.artist,
+        album: sanitized.album,
         duration: item.meta.duration,
         blob: item.file,
         addedAt: now,
@@ -1137,7 +1295,7 @@ export default function App() {
 
     await loadDatabase();
     if (successCount > 0) {
-      showToast(`Successfully added ${successCount} track${successCount !== 1 ? 's' : ''} to library`, 'success');
+      showToast(`Imported ${successCount} ${successCount === 1 ? 'song' : 'songs'}`, 'success');
     }
   };
 
@@ -1147,19 +1305,33 @@ export default function App() {
     setIsClassificationWizardOpen(true);
   };
 
-  const handleConfirmEditClassification = async (trackId: number, category?: string, genre?: string) => {
+  const handleConfirmEditClassification = async (
+    trackId: number, 
+    category?: string, 
+    genre?: string,
+    title?: string,
+    artist?: string,
+    album?: string
+  ) => {
     try {
-      await db.tracks.update(trackId, { category, genre });
+      const updates: Partial<Track> = {};
+      if (category !== undefined) updates.category = category as MusicCategory;
+      if (genre !== undefined) updates.genre = genre;
+      if (title !== undefined && title.trim()) updates.title = sanitizeMetadata(title).title;
+      if (artist !== undefined && artist.trim()) updates.artist = sanitizeMetadata('', artist).artist;
+      if (album !== undefined && album.trim()) updates.album = sanitizeMetadata('', '', album).album;
+
+      await db.tracks.update(trackId, updates);
       setLibrary(prev =>
-        prev.map(t => (t.id === trackId ? { ...t, category, genre } : t))
+        prev.map(t => (t.id === trackId ? { ...t, ...updates } : t))
       );
       if (currentTrack && currentTrack.id === trackId) {
-        setCurrentTrack(prev => (prev ? { ...prev, category, genre } : null));
+        setCurrentTrack(prev => (prev ? { ...prev, ...updates } : null));
       }
-      showToast('Updated Category & Genre tags', 'success');
+      showToast('Updated track details', 'success');
     } catch (err) {
-      console.error('Failed to update track classification:', err);
-      showToast('Failed to update tags', 'error');
+      console.error('Failed to update track details:', err);
+      showToast('Failed to update details', 'error');
     }
   };
 
@@ -1207,7 +1379,7 @@ export default function App() {
           file: track1.blob,
           addedAt: Date.now() - 2000,
           createdAt: Date.now() - 2000,
-          isFavorite: true,
+          isFavorite: false,
           bitrate: 1411200,
           sampleRate: 44100,
           lyrics: DEMO_LYRICS['Neon Horizon'],
@@ -1267,15 +1439,105 @@ export default function App() {
   };
 
   // --- Track Actions ---
-  const handleToggleFavorite = async (track: Track) => {
-    const updatedFav = !track.isFavorite;
-    await db.tracks.update(track.id, { isFavorite: updatedFav });
-    setLibrary(prev => prev.map(t => t.id === track.id ? { ...t, isFavorite: updatedFav } : t));
-    if (currentTrack?.id === track.id) {
-      setCurrentTrack(prev => prev ? { ...prev, isFavorite: updatedFav } : null);
+  const handleToggleFavorite = (trackOrId: Track | number | string, eOrFav?: React.MouseEvent | boolean, explicitFav?: boolean) => {
+    let e: React.MouseEvent | undefined;
+    let targetFav: boolean | undefined;
+
+    if (eOrFav && typeof eOrFav === 'object' && 'stopPropagation' in eOrFav) {
+      e = eOrFav;
+      if (typeof explicitFav === 'boolean') targetFav = explicitFav;
+    } else if (typeof eOrFav === 'boolean') {
+      targetFav = eOrFav;
     }
+
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    const targetTrack = typeof trackOrId === 'object' && trackOrId !== null
+      ? trackOrId
+      : library.find(t => String(t.id) === String(trackOrId));
+
+    const rawId = typeof trackOrId === 'object' && trackOrId !== null
+      ? trackOrId.id
+      : trackOrId;
+    const targetId = Number(rawId);
+    if (isNaN(targetId) || targetId <= 0) return;
+
+    // Identify all matching track IDs in the library that correspond to this exact song (by ID or Title + Artist)
+    const matchingTrackIds = library
+      .filter(t => 
+        Number(t.id) === targetId || 
+        (targetTrack && 
+         t.title.trim().toLowerCase() === targetTrack.title.trim().toLowerCase() && 
+         (t.artist || '').trim().toLowerCase() === (targetTrack.artist || '').trim().toLowerCase())
+      )
+      .map(t => Number(t.id));
+
+    if (!matchingTrackIds.includes(targetId)) {
+      matchingTrackIds.push(targetId);
+    }
+
+    // Determine target favorite state: if any matching track is favorited, it is currently a favorite
+    const isCurrentlyFav = favoriteIds.some(id => matchingTrackIds.includes(Number(id)));
+    const isNowFav = targetFav !== undefined ? targetFav : !isCurrentlyFav;
+
+    // Compute strictly unique positive numerical IDs
+    const nextFavSet = new Set(favoriteIds.map(Number).filter(n => !isNaN(n) && n > 0));
+    if (isNowFav) {
+      matchingTrackIds.forEach(id => nextFavSet.add(id));
+    } else {
+      matchingTrackIds.forEach(id => nextFavSet.delete(id));
+    }
+    const updatedFavIds = Array.from(nextFavSet);
+
+    // 1. Update reactive state
+    setFavoriteIds(updatedFavIds);
+
+    // 2. Persist to localStorage and dispatch event
+    try {
+      localStorage.setItem('cadence_favorites', JSON.stringify(updatedFavIds));
+      localStorage.setItem('cadence_favorite_ids', JSON.stringify(updatedFavIds));
+      window.dispatchEvent(new Event('cadence_favorites_updated'));
+    } catch (err) {
+      console.warn('Failed to update localStorage favorites:', err);
+    }
+
+    // 3. Update IndexedDB for all matching tracks
+    for (const id of matchingTrackIds) {
+      db.tracks.update(id, { isFavorite: isNowFav }).catch(console.error);
+    }
+
+    // 4. Update in-memory library & queue states
+    setLibrary(prevLib => prevLib.map(t => matchingTrackIds.includes(Number(t.id)) ? { ...t, isFavorite: isNowFav } : t));
+    setQueue(prevQueue => prevQueue.map(t => matchingTrackIds.includes(Number(t.id)) ? { ...t, isFavorite: isNowFav } : t));
+
+    // 5. Update currentTrack state if it matches any of the IDs or title+artist
+    if (currentTrack && (
+      matchingTrackIds.includes(Number(currentTrack.id)) ||
+      (targetTrack && currentTrack.title.trim().toLowerCase() === targetTrack.title.trim().toLowerCase() && 
+       (currentTrack.artist || '').trim().toLowerCase() === (targetTrack.artist || '').trim().toLowerCase())
+    )) {
+      setCurrentTrack(prevCurr => prevCurr ? { ...prevCurr, isFavorite: isNowFav } : null);
+    }
+
+    // 6. User feedback toast
+    if (targetTrack) {
+      if (isNowFav) {
+        showToast('Added to Favorites', 'success');
+      } else {
+        showToast('Removed from Favorites', 'info', {
+          label: 'Undo',
+          onClick: () => {
+            handleToggleFavorite(targetTrack, !isNowFav);
+          },
+        });
+      }
+    }
+
     if (currentUser) {
-      syncLocalMetadataWithCloud(currentUser);
+      pushLocalMetadataToCloud(currentUser);
     }
   };
 
@@ -1302,42 +1564,65 @@ export default function App() {
           setCurrentTrack(null);
         }
         await loadDatabase();
-        showToast(`Deleted "${track.title}"`, 'info');
+        showToast('Track deleted', 'info', {
+          label: 'Undo',
+          onClick: async () => {
+            await db.tracks.put(track);
+            await loadDatabase();
+            showToast('Track restored', 'success');
+          },
+        });
       },
     });
   };
 
   const handleAddToQueue = (track: Track) => {
     setQueue(prev => [...prev, track]);
-    showToast(`Added "${track.title}" to queue`, 'info');
+    showToast('Added to queue', 'info');
   };
 
   const handlePlayNext = (track: Track) => {
     setQueue(prev => [track, ...prev]);
-    showToast(`"${track.title}" will play next`, 'info');
+    showToast('Playing next', 'info');
   };
 
   // --- Playlist Actions ---
   const handleSavePlaylist = async (name: string, description: string, coverColor: string) => {
-    if (editingPlaylist) {
-      await db.playlists.update(editingPlaylist.id, { name, description, coverColor });
-      showToast(`Updated playlist "${name}"`, 'success');
-    } else {
-      const newPl: Omit<Playlist, 'id'> = {
-        name,
-        description,
-        createdAt: Date.now(),
-        trackIds: [],
-        coverColor,
-      };
-      const id = await db.playlists.add(newPl as Playlist);
-      showToast(`Created playlist "${name}"`, 'success');
-      setCurrentView({ playlistId: id });
-    }
-    setEditingPlaylist(null);
-    await loadDatabase();
-    if (currentUser) {
-      syncLocalMetadataWithCloud(currentUser);
+    try {
+      const trimmedName = name.trim();
+      // Remove from deleted list if recreating or updating
+      try {
+        const raw = localStorage.getItem('cadence_deleted_playlist_names') || '[]';
+        const deleted: string[] = JSON.parse(raw);
+        const filtered = deleted.filter(n => n.toLowerCase() !== trimmedName.toLowerCase());
+        localStorage.setItem('cadence_deleted_playlist_names', JSON.stringify(filtered));
+      } catch (e) {
+        // ignore
+      }
+
+      if (editingPlaylist) {
+        await db.playlists.update(editingPlaylist.id, { name: trimmedName, description, coverColor });
+        showToast('Playlist updated', 'success');
+      } else {
+        const newPl: Omit<Playlist, 'id'> = {
+          name: trimmedName,
+          description,
+          createdAt: Date.now(),
+          trackIds: [],
+          coverColor,
+        };
+        const id = await db.playlists.add(newPl as Playlist);
+        showToast('Playlist created', 'success');
+        setCurrentView({ playlistId: id });
+      }
+      setEditingPlaylist(null);
+      await loadDatabase();
+      if (currentUser) {
+        await pushLocalMetadataToCloud(currentUser);
+      }
+    } catch (err) {
+      console.error('Failed to save playlist:', err);
+      showToast('Failed to save playlist', 'error');
     }
   };
 
@@ -1348,15 +1633,46 @@ export default function App() {
       title: 'Delete Playlist',
       message: `Are you sure you want to delete playlist "${pl?.name || 'this playlist'}"? Your songs will remain in your library.`,
       onConfirm: async () => {
-        await db.playlists.delete(playlistId);
-        if (typeof currentView === 'object' && currentView.playlistId === playlistId) {
-          setCurrentView('library');
+        try {
+          if (pl?.name) {
+            try {
+              const raw = localStorage.getItem('cadence_deleted_playlist_names') || '[]';
+              const deleted: string[] = JSON.parse(raw);
+              if (!deleted.includes(pl.name)) {
+                deleted.push(pl.name);
+                localStorage.setItem('cadence_deleted_playlist_names', JSON.stringify(deleted));
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          // Delete from IndexedDB
+          await db.playlists.delete(playlistId);
+
+          // Immediately update state so UI updates without lag
+          setPlaylists(prev => prev.filter(p => p.id !== playlistId));
+
+          // If currently viewing this deleted playlist, switch view back to library
+          setCurrentView(prevView => {
+            if (typeof prevView === 'object' && prevView.playlistId === playlistId) {
+              return 'library';
+            }
+            return prevView;
+          });
+
+          await loadDatabase();
+
+          // Push updated state to cloud
+          if (currentUser) {
+            await pushLocalMetadataToCloud(currentUser);
+          }
+
+          showToast(`Deleted playlist "${pl?.name || 'Playlist'}"`, 'info');
+        } catch (err) {
+          console.error('Failed to delete playlist:', err);
+          showToast('Failed to delete playlist', 'error');
         }
-        await loadDatabase();
-        if (currentUser) {
-          syncLocalMetadataWithCloud(currentUser);
-        }
-        showToast('Playlist deleted', 'info');
       },
     });
   };
@@ -1365,13 +1681,13 @@ export default function App() {
     const pl = playlists.find(p => p.id === playlistId);
     if (!pl) return;
     if (pl.trackIds.includes(trackId)) {
-      showToast(`Track is already in "${pl.name}"`, 'info');
+      showToast('Already in playlist', 'info');
       return;
     }
     const updatedIds = [...pl.trackIds, trackId];
     await db.playlists.update(playlistId, { trackIds: updatedIds });
     await loadDatabase();
-    showToast(`Added to "${pl.name}"`, 'success');
+    showToast('Added to playlist', 'success');
   };
 
   const handleRemoveTrackFromPlaylist = async (trackId: number, playlistId: number) => {
@@ -1380,7 +1696,7 @@ export default function App() {
     const updatedIds = pl.trackIds.filter(id => id !== trackId);
     await db.playlists.update(playlistId, { trackIds: updatedIds });
     await loadDatabase();
-    showToast(`Removed track from "${pl.name}"`, 'info');
+    showToast('Removed from playlist', 'info');
   };
 
   const handleMovePlaylistItem = async (playlistId: number, fromIdx: number, toIdx: number) => {
@@ -1400,6 +1716,7 @@ export default function App() {
     album?: string;
     artworkUrl?: string | null;
     ytMusicUrl: string;
+    spotifyUrl?: string;
   }) => {
     try {
       // 1. Check if track already exists in library
@@ -1407,6 +1724,12 @@ export default function App() {
         t => t.title.toLowerCase() === song.title.toLowerCase() && t.artist.toLowerCase() === song.artist.toLowerCase()
       );
       let trackId: number;
+
+      const linksLyrics = [
+        `[00:00.00] Identified Track: ${song.title} by ${song.artist}`,
+        song.ytMusicUrl ? `[00:01.00] YouTube Music: ${song.ytMusicUrl}` : '',
+        song.spotifyUrl ? `[00:02.00] Spotify: ${song.spotifyUrl}` : '',
+      ].filter(Boolean).join('\n');
 
       if (existingTrack) {
         trackId = existingTrack.id;
@@ -1424,7 +1747,7 @@ export default function App() {
           size: 0,
           coverDataUrl: song.artworkUrl || undefined,
           isFavorite: false,
-          lyrics: `[00:00.00] Identified Track: ${song.title} by ${song.artist}\n[00:01.00] YouTube Music: ${song.ytMusicUrl}`,
+          lyrics: linksLyrics,
         };
         trackId = await db.tracks.add(newTrack as Track);
       }
@@ -1450,10 +1773,10 @@ export default function App() {
       }
 
       await loadDatabase();
-      showToast(`Saved "${song.title}" to "${WISHLIST_NAME}"`, 'success');
+      showToast('Saved to Wishlist', 'success');
     } catch (err) {
       console.error('Failed to save identified song to wishlist:', err);
-      showToast('Could not save track to wishlist', 'error');
+      showToast('Failed to save track', 'error');
     }
   };
 
@@ -1650,17 +1973,29 @@ export default function App() {
     };
   }, []);
 
+  // Aggregate strictly unique favorite song count (matching visible favorites tracks)
+  const favoritesCount = useMemo(() => {
+    const seenFavKeys = new Set<string>();
+    let count = 0;
+    for (const t of library) {
+      if (favoriteIds.some(id => Number(id) === Number(t.id))) {
+        const key = `${t.title.trim().toLowerCase()}:::${(t.artist || '').trim().toLowerCase()}`;
+        if (!seenFavKeys.has(key)) {
+          seenFavKeys.add(key);
+          count++;
+        }
+      }
+    }
+    return count > 0 ? count : (new Set(favoriteIds.map(Number).filter(n => !isNaN(n) && n > 0)).size);
+  }, [library, favoriteIds]);
+
   // --- Active View Metadata for Header ---
   const currentViewDetails = useMemo(() => {
     if (currentView === 'library') {
       return { title: 'All Tracks', subtitle: `${library.length} songs in library` };
     }
     if (currentView === 'favorites') {
-      const count = library.filter(t => t.isFavorite).length;
-      return { title: 'Favorite Tracks', subtitle: `${count} favorite songs` };
-    }
-    if (currentView === 'recent') {
-      return { title: 'Recently Added', subtitle: 'Sorted by date added' };
+      return { title: 'Favorite Tracks', subtitle: `${favoritesCount} favorite songs` };
     }
     if (typeof currentView === 'object') {
       const pl = playlists.find(p => p.id === currentView.playlistId);
@@ -1670,48 +2005,29 @@ export default function App() {
       };
     }
     return { title: 'Audio Library', subtitle: '' };
-  }, [currentView, library, playlists]);
-
-  const favoritesCount = useMemo(() => library.filter(t => t.isFavorite).length, [library]);
+  }, [currentView, library, playlists, favoritesCount]);
 
   return (
-    <div className="flex flex-col lg:flex-row h-[100dvh] w-full overflow-hidden bg-black text-zinc-100 select-none relative">
-      {/* 1. Dynamic Blurred Backdrop: Apple Music ambient album glow */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0 select-none">
-        {currentTrack?.coverDataUrl ? (
-          <div 
-            className="absolute -inset-10 bg-cover bg-center filter blur-3xl opacity-25 scale-125 transition-all duration-1000 ease-out transform-gpu"
-            style={{ backgroundImage: `url(${currentTrack.coverDataUrl})` }}
-          />
-        ) : (
-          <div className="absolute inset-0 opacity-20 filter blur-3xl pointer-events-none">
-            <div className="absolute -top-[20%] -left-[10%] w-[60vw] h-[60vw] rounded-full bg-gradient-to-br from-rose-500/20 via-pink-600/10 to-transparent animate-pulse duration-1000" />
-            <div className="absolute top-[35%] -right-[15%] w-[50vw] h-[50vw] rounded-full bg-gradient-to-bl from-purple-600/15 via-rose-500/10 to-transparent" />
-            <div className="absolute -bottom-[20%] left-[20%] w-[55vw] h-[55vw] rounded-full bg-gradient-to-tr from-amber-600/10 via-rose-500/15 to-transparent" />
-          </div>
-        )}
-        {/* Soft obsidian vignette ensuring maximum contrast and legibility */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/75 to-black pointer-events-none" />
-      </div>
+    <div className="flex flex-col md:flex-row h-[100dvh] w-full overflow-hidden bg-black text-zinc-100 select-none relative">
 
-      {/* Toast Notification (macOS notification banner style) */}
+      {/* Bottom Minimalist Snackbar (YouTube Music & Spotify inspired) */}
       {toastMessage && (
-        <div className="fixed top-3 right-3 sm:top-4 sm:right-4 z-50 animate-in slide-in-from-top-2 duration-200">
-          <div className={`px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl border shadow-2xl flex items-center gap-2.5 text-xs font-medium backdrop-blur-2xl ${
-            toastMessage.type === 'success'
-              ? 'bg-[#0a0a0a]/95 border-emerald-500/30 text-emerald-200'
-              : toastMessage.type === 'error'
-              ? 'bg-[#0a0a0a]/95 border-rose-500/30 text-rose-200'
-              : 'bg-[#0a0a0a]/95 border-white/10 text-white'
-          }`}>
-            {toastMessage.type === 'success' ? (
-              <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
-            ) : toastMessage.type === 'error' ? (
-              <AlertCircle size={15} className="text-rose-400 shrink-0" />
-            ) : (
-              <Sparkles size={15} className="text-rose-400 shrink-0" />
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div className="px-4 py-2 rounded-full bg-[#1c1c1e] text-zinc-200 border border-white/10 text-xs font-medium shadow-2xl flex items-center gap-2.5 transition-all duration-200 animate-fade-in whitespace-nowrap">
+            <span>{toastMessage.text}</span>
+            {toastMessage.action && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toastMessage.action?.onClick();
+                  setToastMessage(null);
+                }}
+                className="text-white font-semibold hover:underline ml-2 pointer-events-auto cursor-pointer"
+              >
+                {toastMessage.action.label}
+              </button>
             )}
-            <span className="truncate max-w-xs">{toastMessage.text}</span>
           </div>
         </div>
       )}
@@ -1761,7 +2077,7 @@ export default function App() {
       />
 
       {/* Main Workspace */}
-      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-transparent z-10">
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-black z-10">
         {/* Top Header */}
         <TopBar
           searchQuery={searchQuery}
@@ -1788,13 +2104,57 @@ export default function App() {
           onOpenAccountModal={() => setIsAccountModalOpen(true)}
           onOpenListenTogether={() => setIsListenTogetherOpen(true)}
           activeSession={activeSession}
+          onEditCurrentPlaylist={
+            typeof currentView === 'object'
+              ? () => {
+                  const pl = playlists.find(p => p.id === currentView.playlistId);
+                  if (pl) {
+                    setEditingPlaylist(pl);
+                    setPlaylistModalOpen(true);
+                  }
+                }
+              : undefined
+          }
+          onDeleteCurrentPlaylist={
+            typeof currentView === 'object'
+              ? () => handleDeletePlaylist(currentView.playlistId)
+              : undefined
+          }
         />
 
         {/* Content Table / Main View */}
-        <main className="flex-1 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 pb-safe flex flex-col">
+        <main className="flex-1 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 pb-safe flex flex-col bg-black">
           <div className="flex-1 flex flex-col min-h-full w-full max-w-full">
             {visibleTracks.length === 0 ? (
-              library.length > 0 ? (
+              typeof currentView === 'object' ? (
+                /* Empty Playlist State */
+                <div className="flex-1 py-16 flex flex-col items-center justify-center text-center max-w-sm mx-auto">
+                  <div className="w-14 h-14 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center text-rose-400 mb-3 shadow-lg">
+                    <Music size={24} />
+                  </div>
+                  <h4 className="text-base font-semibold text-white">This playlist is empty</h4>
+                  <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
+                    Add tracks to this playlist from your library using the track menu (⋮) or drag songs onto the playlist in the sidebar.
+                  </p>
+                  <div className="mt-5 flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('library')}
+                      className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-full text-xs font-semibold border border-white/10 transition-colors cursor-pointer"
+                    >
+                      Browse Library
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePlaylist(currentView.playlistId)}
+                      className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-white rounded-full text-xs font-semibold border border-rose-500/20 transition-colors cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Trash2 size={13} />
+                      <span>Delete Playlist</span>
+                    </button>
+                  </div>
+                </div>
+              ) : library.length > 0 ? (
                 /* Empty state due to active filter */
                 <div className="flex-1 py-16 flex flex-col items-center justify-center text-center max-w-sm mx-auto">
                   <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center text-rose-400 mb-3">
@@ -1826,26 +2186,16 @@ export default function App() {
                   <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
                     {searchQuery
                       ? `No songs matched "${searchQuery}". Try a different keyword.`
-                      : 'Import audio files from your device, paste a web audio URL, or generate 3 free synthwave demo tracks.'}
+                      : 'Import your local audio files (.mp3, .flac, .wav, .m4a) to start listening offline.'}
                   </p>
                   {!searchQuery && (
-                    <div className="mt-5 flex flex-col sm:flex-row items-center gap-2.5 w-full max-w-xs">
-                      {/* Apple-style pill action buttons with subtle translucency */}
+                    <div className="mt-5 flex justify-center w-full max-w-xs">
                       <button
                         onClick={() => setIsImportModalOpen(true)}
-                        className="w-full py-2.5 px-4 bg-white/10 hover:bg-white/15 active:scale-95 text-white rounded-full text-xs font-semibold border border-white/10 shadow-sm backdrop-blur-md transition-all flex items-center justify-center gap-2"
+                        className="w-full py-2.5 px-5 bg-white text-black hover:bg-zinc-200 active:scale-95 rounded-xl text-xs font-semibold shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <UploadCloud size={15} />
+                        <UploadCloud size={16} />
                         <span>Import Audio Files</span>
-                      </button>
-
-                      <button
-                        onClick={handleLoadDemoTracks}
-                        disabled={isLoadingDemo}
-                        className="w-full py-2.5 px-4 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] disabled:opacity-50 text-zinc-300 hover:text-white rounded-full text-xs font-medium transition-colors flex items-center justify-center gap-2 backdrop-blur-md"
-                      >
-                        <Sparkles size={14} className="text-rose-400" />
-                        <span>{isLoadingDemo ? 'Synthesizing...' : 'Load 3 Demo Tracks'}</span>
                       </button>
                     </div>
                   )}
@@ -1963,10 +2313,25 @@ export default function App() {
                         key={`${track.id}-${idx}`}
                         track={track}
                         index={idx}
+                        isFavorite={
+                          favoriteIds.some(id => Number(id) === Number(track.id)) ||
+                          library.some(t =>
+                            favoriteIds.some(favId => Number(favId) === Number(t.id)) &&
+                            t.title.trim().toLowerCase() === track.title.trim().toLowerCase() &&
+                            (t.artist || '').trim().toLowerCase() === (track.artist || '').trim().toLowerCase()
+                          )
+                        }
                         isCurrent={isCurrent}
                         isPlaying={isPlaying}
-                        onPlay={playTrack}
-                        onToggleFavorite={handleToggleFavorite}
+                        onPlay={(t) => {
+                          if (currentTrack?.id === t.id) {
+                            togglePlay();
+                          } else {
+                            playTrack(t);
+                          }
+                        }}
+                        onTogglePlay={togglePlay}
+                        onToggleFavorite={(t, nextFav) => handleToggleFavorite(t, nextFav)}
                         onPlayNext={handlePlayNext}
                         onAddToQueue={handleAddToQueue}
                         onInspect={setInspectingTrack}
@@ -1990,12 +2355,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Simple Footer Badge */}
-            <div className="mt-auto pt-6 pb-3 sm:pb-4 flex justify-center items-center text-center select-none shrink-0">
-              <span className="text-xs text-zinc-500 tracking-wide font-medium">
-                Made by Aman
-              </span>
-            </div>
           </div>
         </main>
 
@@ -2017,6 +2376,18 @@ export default function App() {
           onCycleRepeat={() => setRepeatMode(prev => prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off')}
           isShuffle={isShuffle}
           onToggleShuffle={() => setIsShuffle(prev => !prev)}
+          isFavorite={
+            currentTrack
+              ? Boolean(
+                  favoriteIds.some(id => Number(id) === Number(currentTrack.id)) ||
+                    library.some(t =>
+                      favoriteIds.some(favId => Number(favId) === Number(t.id)) &&
+                      t.title.trim().toLowerCase() === currentTrack.title.trim().toLowerCase() &&
+                      (t.artist || '').trim().toLowerCase() === (currentTrack.artist || '').trim().toLowerCase()
+                    )
+                )
+              : false
+          }
           onToggleFavorite={handleToggleFavorite}
           playbackRate={playbackRate}
           onChangePlaybackRate={handleChangePlaybackRate}
@@ -2094,6 +2465,11 @@ export default function App() {
         }}
         playlistToEdit={editingPlaylist}
         onSave={handleSavePlaylist}
+        onDelete={(id) => {
+          setPlaylistModalOpen(false);
+          setEditingPlaylist(null);
+          handleDeletePlaylist(id);
+        }}
       />
 
       {/* Track Metadata Inspector Modal */}
@@ -2107,7 +2483,20 @@ export default function App() {
       <FullscreenPlayerModal
         isOpen={isFullscreenOpen}
         onClose={() => setIsFullscreenOpen(false)}
-        currentTrack={currentTrack}
+        currentTrack={
+          currentTrack
+            ? {
+                ...currentTrack,
+                isFavorite:
+                  favoriteIds.some(id => Number(id) === Number(currentTrack.id)) ||
+                  library.some(t =>
+                    favoriteIds.some(favId => Number(favId) === Number(t.id)) &&
+                    t.title.trim().toLowerCase() === currentTrack.title.trim().toLowerCase() &&
+                    (t.artist || '').trim().toLowerCase() === (currentTrack.artist || '').trim().toLowerCase()
+                  )
+              }
+            : null
+        }
         isPlaying={isPlaying}
         onTogglePlay={togglePlay}
         onPrev={handlePrev}
@@ -2123,6 +2512,7 @@ export default function App() {
         onCycleRepeat={() => setRepeatMode(prev => prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off')}
         isShuffle={isShuffle}
         onToggleShuffle={() => setIsShuffle(prev => !prev)}
+        onToggleFavorite={(t, nextFav) => handleToggleFavorite(t, nextFav)}
         analyser={analyserNodeState}
         sleepTimer={sleepTimer}
         onOpenLyrics={() => setIsLyricsModalOpen(true)}
@@ -2219,6 +2609,19 @@ export default function App() {
       <AboutModal
         isOpen={isAboutModalOpen}
         onClose={() => setIsAboutModalOpen(false)}
+      />
+
+      {/* Master HTML5 Audio Element for rock-solid continuous queue playback & auto-advance */}
+      <audio
+        ref={audioRef}
+        onEnded={handleTrackEnded}
+        onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onPlay={handlePlayEvent}
+        onPause={handlePauseEvent}
+        onError={handleAudioError}
+        className="hidden"
+        preload="auto"
       />
     </div>
   );

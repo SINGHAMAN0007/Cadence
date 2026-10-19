@@ -115,6 +115,7 @@ export interface UserCloudProfile {
     description?: string;
     createdAt: number;
     trackTitles?: string[];
+    coverColor?: string;
   }[];
   updatedAt?: string;
 }
@@ -135,6 +136,27 @@ export interface PlaybackSessionData {
   status: 'active' | 'ended';
 }
 
+/**
+ * Recursively strips undefined fields from an object or array to ensure compatibility with Firestore.
+ * Firestore throws an error if any field in a document is undefined.
+ */
+export function removeUndefinedFields<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(item => removeUndefinedFields(item)) as unknown as T;
+  }
+  if (typeof obj === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (val !== undefined) {
+        cleaned[key] = removeUndefinedFields(val);
+      }
+    }
+    return cleaned as T;
+  }
+  return obj;
+}
+
 // Save or sync user cloud profile
 export async function syncUserMetadataToCloud(profile: Partial<UserCloudProfile>): Promise<void> {
   const user = auth.currentUser;
@@ -142,14 +164,16 @@ export async function syncUserMetadataToCloud(profile: Partial<UserCloudProfile>
   const path = `users/${user.uid}`;
   try {
     const userDocRef = doc(firestoreDb, 'users', user.uid);
-    await setDoc(userDocRef, {
+    const rawData = {
       userId: user.uid,
       email: user.email || '',
       displayName: user.displayName || 'Music Lover',
       photoURL: user.photoURL || '',
       ...profile,
       updatedAt: new Date().toISOString()
-    }, { merge: true });
+    };
+    const cleanData = removeUndefinedFields(rawData);
+    await setDoc(userDocRef, cleanData, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -207,7 +231,7 @@ export async function createPlaybackSession(
 
   const path = `sessions/${sessionId}`;
   try {
-    await setDoc(doc(firestoreDb, 'sessions', sessionId), sessionData);
+    await setDoc(doc(firestoreDb, 'sessions', sessionId), removeUndefinedFields(sessionData));
     return sessionData;
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
@@ -223,11 +247,12 @@ export async function updateSessionPlayback(
   const path = `sessions/${sessionId}`;
   try {
     const sessionRef = doc(firestoreDb, 'sessions', sessionId);
-    await updateDoc(sessionRef, {
+    const cleanUpdates = removeUndefinedFields({
       ...updates,
       lastUpdated: Date.now(),
       updatedByDeviceId: DEVICE_ID,
     });
+    await updateDoc(sessionRef, cleanUpdates);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
